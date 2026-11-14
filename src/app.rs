@@ -67,7 +67,7 @@ impl eframe::App for EnchantmentHelperApp {
             });
 
             let selected_label = self.selected_window_label();
-            egui::ComboBox::from_id_source("game_window_selector")
+            egui::ComboBox::from_id_salt("game_window_selector")
                 .selected_text(selected_label)
                 .width(390.0)
                 .show_ui(ui, |ui| {
