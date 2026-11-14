@@ -20,9 +20,8 @@ impl Default for EnchantmentHelperApp {
             selected_window: None,
             runs_per_pass: 1,
             run_state: RunState::Idle,
-            status_message:
-                "Готово к настройке. Автоматизация игровых действий ещё не подключена."
-                    .to_owned(),
+            status_message: "Готово к настройке. Автоматизация игровых действий ещё не подключена."
+                .to_owned(),
         }
     }
 }
@@ -46,11 +45,7 @@ impl EnchantmentHelperApp {
 
     fn selected_window_label(&self) -> String {
         self.selected_window
-            .and_then(|selected| {
-                self.windows
-                    .iter()
-                    .find(|window| window.handle == selected)
-            })
+            .and_then(|selected| self.windows.iter().find(|window| window.handle == selected))
             .map(|window| format!("{} (PID: {})", window.title, window.process_id))
             .unwrap_or_else(|| "Окно не выбрано".to_owned())
     }
