@@ -1,7 +1,7 @@
 use windows_sys::Win32::Foundation::{BOOL, LPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-    IsWindowVisible, HWND,
+    EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+    HWND,
 };
 
 use crate::model::GameWindow;
@@ -17,11 +17,7 @@ unsafe extern "system" fn collect_window(hwnd: HWND, parameter: LPARAM) -> BOOL 
     }
 
     let mut title_buffer = vec![0_u16; title_length as usize + 1];
-    let copied = GetWindowTextW(
-        hwnd,
-        title_buffer.as_mut_ptr(),
-        title_buffer.len() as i32,
-    );
+    let copied = GetWindowTextW(hwnd, title_buffer.as_mut_ptr(), title_buffer.len() as i32);
 
     if copied <= 0 {
         return 1;
