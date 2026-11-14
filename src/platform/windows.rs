@@ -1,7 +1,6 @@
-use windows_sys::Win32::Foundation::{BOOL, LPARAM};
+use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
-    HWND,
 };
 
 use crate::model::GameWindow;
