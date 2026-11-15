@@ -13,13 +13,13 @@ use windows_sys::Win32::{
     },
     UI::{
         Input::KeyboardAndMouse::{
-            GetAsyncKeyState, mouse_event, SetCursorPos, MOUSEEVENTF_LEFTDOWN,
+            GetAsyncKeyState, mouse_event, MOUSEEVENTF_LEFTDOWN,
             MOUSEEVENTF_LEFTUP, VK_F12,
         },
         WindowsAndMessaging::{
             EnumWindows, GetForegroundWindow, GetWindowRect, GetWindowTextLengthW,
             GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-            SetForegroundWindow, ShowWindow, SW_RESTORE,
+            SetForegroundWindow, SetCursorPos, ShowWindow, SW_RESTORE,
         },
     },
 };
