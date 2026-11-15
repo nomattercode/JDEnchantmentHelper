@@ -55,7 +55,7 @@ impl Default for InventoryConfig {
             origin_x: 34, origin_y: 84, columns: 6, rows: 8,
             cell_width: 36, cell_height: 36, step_x: 40, step_y: 40,
             inset: 6, start_row: 0, start_col: 1, amulet_row: 0, amulet_col: 0,
-            method: DetectionMethod::GrayscaleVariance, threshold: 0.18,
+            method: DetectionMethod::GrayscaleVariance, threshold: 0.11,
             canny_low: 45.0, canny_high: 130.0,
         }
     }
@@ -150,7 +150,7 @@ fn score_cell(frame: &Mat, rect: Rect, config: &InventoryConfig) -> opencv::Resu
         DetectionMethod::GrayscaleVariance => variance_score,
         DetectionMethod::EdgeDensity => edge_score,
         DetectionMethod::Saturation => saturation_score,
-        DetectionMethod::Combined => variance_score.max(edge_score).max(saturation_score),
+        DetectionMethod::Combined => 0.55 * variance_score + 0.30 * edge_score + 0.15 * saturation_score,
     })
 }
 
