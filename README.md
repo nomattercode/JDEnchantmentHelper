@@ -24,9 +24,9 @@ No game mouse/keyboard automation, live screen capture, inventory scrolling, or 
 
 Prerequisites:
 
-1. Rust stable 1.81 or newer with the MSVC toolchain: https://rustup.rs
+1. Rust stable 1.82 or newer with the MSVC toolchain: https://rustup.rs
 2. Visual Studio Build Tools (C++ workload).
-3. LLVM/Clang (OpenCV's Rust binding generator needs Clang). The project uses `opencv` crate 0.96.0, which includes a Windows build fix for Clang 21. For example: `choco install llvm -y`. The build script prints the selected Clang path and version.
+3. LLVM/Clang (OpenCV's Rust binding generator needs Clang). The project uses `opencv` crate 0.98.2, which includes the Windows binding-generation compatibility fix for Clang 22. For example: `choco install llvm -y`. The build script prints the selected Clang path and version.
 4. vcpkg installed, with `VCPKG_ROOT` pointing to its directory. The build script installs `opencv4:x64-windows` automatically if it is not present. It recognizes both vcpkg header layouts (`include\\opencv2` and `include\\opencv4\\opencv2`), including the nested layout used by current OpenCV 4.14 ports.
 
 Run:
