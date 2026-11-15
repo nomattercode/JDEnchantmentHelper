@@ -1,25 +1,30 @@
 # JD Enchantment Helper
 
-Rust desktop diagnostic application for analysing Jade Dynasty inventory and enchantment UI screenshots. Windows 10 is the primary target.
+Windows desktop utility for Jade Dynasty inventory analysis and assisted enchantment runs.
 
-## Current functionality
+## Features
 
-- Enumerate visible top-level windows and select one exact HWND, even when several windows share the same process or title.
-- Show per-window preview cards with title, PID, HWND and dimensions. Refresh captures on demand using Windows GDI; previews are display-only.
-- Select 1–10 logical inventory passes.
-- Start / Pause / Stop UI state controls. **These buttons do not send input to the game.**
-- Inventory grid scanner using OpenCV:
-  - configurable origin, cell size, spacing, rows and columns;
-  - configurable start cell and amulet cell (amulet is always excluded from candidates);
-  - grayscale variance, Canny edge density, HSV saturation, or combined occupancy score;
-  - annotated overlay and per-cell score map.
-- Enchantment confirmation detector using multi-scale OpenCV template matching for the blue OK button from both supplied outcomes.
-- Optional estimate of the Insert button's active state using a configurable HSV ROI. Disabled by default because its coordinates must be calibrated against a full game-window screenshot.
-- Debug log with each cell's coordinates, score, threshold, classification and each template-match confidence.
-- Diagnostic PNGs saved to `diagnostics/` (input frame, annotated overlay, score map).
-- Unicode screenshot paths are supported: image bytes are read by Rust and decoded by OpenCV, rather than relying on Windows ANSI path APIs.
+- Select a game window from a standard dropdown showing title, PID and client dimensions.
+- Refresh the available windows and inspect a live preview.
+- Drag a rectangle over the active blue **Start** button. The button's state is evaluated only inside this calibrated region; gray means not ready and blue means ready.
+- Select 1–10 enchantment passes with left/right arrows.
+- Start a run sequence: the application waits for the blue Start button, verifies it in two consecutive captures, clicks its centre, waits for the matching OK button template, verifies it twice, then clicks OK. It repeats for the requested number of runs.
+- Global **F12 emergency stop** is polled while automation is armed, including while the game window has focus. The normal Stop button is also available.
+- Pause and Resume controls.
+- Inventory grid scanning and file-based diagnostics remain available.
+- Debug PNGs are saved into `diagnostics\`.
 
-No game mouse/keyboard automation, automatic enchantment cycle, or continuous live analysis is implemented. GDI window capture is used only to display picker previews. The dedicated «Начать» template detector still requires the updated screenshot archive; the supplied SwissTransfer link could not be downloaded from the development environment.
+## Important operating notes
+
+1. The active Start-button region must be calibrated once for the selected game window. Select the window, enable **Выделить область**, then drag around the full Start button in the preview. The rectangle is saved in source-window pixel coordinates.
+2. Before the first automated run, use file diagnostics or inspect the live frame to confirm the region tightly surrounds the Start button. Do not include adjacent blue controls.
+3. The Start detector checks for saturated blue pixels inside that rectangle. It does not use an image template because the button changes from gray to blue when both required items are inserted.
+4. The OK detector uses the supplied success/failure templates. Keep the OK button's size and visual style close to the reference screenshots; adjust the confidence threshold only after inspecting false matches.
+5. Automation is sequential and state-driven; it does not click by fixed delays alone. It requires two consecutive detections before each click.
+6. F12 stops the cycle immediately at the next UI poll. Use it if the game layout changes, the wrong control is highlighted, or the application behaves unexpectedly.
+7. The application moves the system pointer and sends real left-click events to the selected foreground window. Do not move the game window or change its resolution while automation is running.
+8. Keep the game window visible and unobstructed. Minimized, closed or inaccessible windows cause automation to stop.
+9. Start with one pass and observe the first cycle before increasing the run count. The tool does not guarantee that a game server will accept an enchantment attempt.
 
 ## Build on Windows 10
 
@@ -27,8 +32,8 @@ Prerequisites:
 
 1. Rust stable 1.82 or newer with the MSVC toolchain: https://rustup.rs
 2. Visual Studio Build Tools (C++ workload).
-3. LLVM/Clang (OpenCV's Rust binding generator needs Clang). The project uses `opencv` crate 0.98.2, which includes the Windows binding-generation compatibility fix for Clang 22. For example: `choco install llvm -y`. The build script prints the selected Clang path and version.
-4. vcpkg installed, with `VCPKG_ROOT` pointing to its directory. The build script installs `opencv4:x64-windows` automatically if it is not present. It recognizes both vcpkg header layouts (`include\\opencv2` and `include\\opencv4\\opencv2`), including the nested layout used by current OpenCV 4.14 ports.
+3. LLVM/Clang for OpenCV Rust bindings (e.g. `choco install llvm -y`).
+4. vcpkg, with OpenCV installed for `x64-windows`.
 
 Run:
 
@@ -36,45 +41,22 @@ Run:
 scripts\build-test.bat
 ```
 
-The repository includes `.cargo/config.toml`, which forces Cargo and IDE-launched builds to use vcpkg triplet `x64-windows` with dynamic OpenCV libraries (`VCPKGRS_DYNAMIC=1`). The script also prints the selected vcpkg settings. The script performs `cargo fmt`, `cargo check --all-targets`, `cargo test --release --all-targets`, and `cargo build --release`. Tests use the Release profile because the vcpkg OpenCV Debug libraries currently fail to link with the Rust-generated bindings on the Windows MSVC runner; the Release profile matches the executable build. It places the vcpkg OpenCV DLL directory on PATH for the current script session. The executable is created at `target\release\jd-enchantment-helper.exe`.
+The script checks formatting, compiles all targets, runs Release tests and creates:
+`target\release\jd-enchantment-helper.exe`.
 
-## Run screenshot diagnostics
+## Run
 
-1. Start `jd-enchantment-helper.exe`.
-2. Paste a screenshot path into **Файл изображения**. Paths with Cyrillic characters are supported.
-3. Select **Инвентарь** or **Зачарование / OK**.
-4. Adjust the parameters and press **Анализировать**.
-5. Inspect the overlay shown in the app, the OpenCV log on the right, and PNG files in `diagnostics/`.
+Use `run.bat` in the repository root. It adds the vcpkg OpenCV DLL folder to PATH and starts the Release executable.
 
-### Inventory tuning
+## Calibration
 
-Initial geometry is based on the supplied 317×478 screenshot and is only an estimate:
+- The Start-button region is selected interactively by dragging over the preview. Its coordinates are relative to the captured top-level game window.
+- The default blue detector threshold is 22%. If the gray button is detected as active, tighten the ROI or increase the threshold. If the blue button is missed, ensure the full interior of the button is inside the ROI and adjust the threshold.
+- The OK match threshold defaults to 0.84. Use a higher value if non-OK regions are incorrectly recognized.
 
-- origin: `(34, 84)`;
-- grid: `6 columns × 8 rows`;
-- cell: `36×36`;
-- spacing: `40×40`;
-- inner inset: `6` pixels;
-- amulet cell: row 1, column 1;
-- initial start: row 1, column 2.
+## Safety controls
 
-The indices shown in the UI are 1-based. First align the rectangles with the cell frames, then adjust the detection method and threshold. Green means a candidate item, orange means the amulet, gray means before the start cell, red means an empty cell, and gray-white means the cell is outside the image. If a candidate is missed or an empty cell is marked as occupied, inspect its numeric score in the overlay/log and move the threshold or change the method.
-
-### Enchantment detector tuning
-
-The OK templates are crops from the supplied success and failure dialogs. The detector searches the full supplied image at multiple scales (default 0.80–1.25) and reports the best normalized correlation score. Lower the confidence threshold only after inspecting false positives. A green rectangle means the score passed the threshold; amber means a candidate match was found but did not pass.
-
-The Insert-button HSV check is optional and off by default. The configured ROI is relative to the test image. The default values were estimated from the 324×220 cropped enchantment-dialog screenshot and are not guaranteed to align with a full client screenshot.
-
-## Project layout
-
-- `src/app.rs` — egui UI, diagnostic controls and preview.
-- `src/vision/inventory_scanner.rs` — inventory-grid segmentation and annotated output.
-- `src/vision/enchant_detector.rs` — multi-scale OK-button matching and optional Insert-button ROI check.
-- `src/vision/image_io.rs` — Unicode-safe image read/write and preview conversion.
-- `assets/templates/` — cropped OK-button templates from the supplied screenshots.
-- `scripts/build-test.bat` — Windows test/build script.
-
-## Safety boundary
-
-The current application is diagnostic only. No scanner result is sent to the game, and no synthetic input is generated. Validate geometry and recognition against screenshots before any future automation layer is considered.
+- F12: global emergency stop.
+- Stop button: stop the active sequence.
+- Pause: temporarily suspend polling and clicks; Resume continues in the current state.
+- If the target window disappears or capture/click fails, the application stops the sequence.
