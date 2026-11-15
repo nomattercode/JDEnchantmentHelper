@@ -38,7 +38,7 @@ unsafe extern "system" fn collect_window(hwnd: HWND, parameter: isize) -> i32 {
     let mut process_id = 0_u32;
     GetWindowThreadProcessId(hwnd, &mut process_id);
 
-    let mut bounds = RECT::default();
+    let mut bounds = RECT { left: 0, top: 0, right: 0, bottom: 0 };
     if GetWindowRect(hwnd, &mut bounds) == 0 {
         return 1;
     }
@@ -63,7 +63,7 @@ unsafe extern "system" fn collect_window(hwnd: HWND, parameter: isize) -> i32 {
 
 /// Returns visible top-level windows with a title and useful preview dimensions.
 pub fn list_visible_windows() -> Vec<GameWindow> {
-    let mut windows = Vec::new();
+    let mut windows: Vec<GameWindow> = Vec::new();
 
     // The pointer remains valid until EnumWindows returns; the callback does
     // not store it or use it asynchronously.
@@ -139,7 +139,8 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
         unsafe { SelectObject(memory_dc, selected_object); }
         selected_object = std::ptr::null_mut();
 
-        let mut info = BITMAPINFO::default();
+        // BITMAPINFO is a Win32 C data structure; zero is a valid initial state for all fields.
+        let mut info: BITMAPINFO = unsafe { std::mem::zeroed() };
         info.bmiHeader.biSize = std::mem::size_of_val(&info.bmiHeader) as u32;
         info.bmiHeader.biWidth = width;
         // Negative height requests top-down rows, matching OpenCV's image layout.
