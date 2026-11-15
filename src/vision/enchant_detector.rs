@@ -58,7 +58,7 @@ pub struct EnchantAnalysis {
 
 fn grayscale(image: &Mat) -> opencv::Result<Mat> {
     let mut gray = Mat::default();
-    imgproc::cvt_color(image, &mut gray, imgproc::COLOR_BGR2GRAY, 0)?;
+    imgproc::cvt_color(image, &mut gray, imgproc::COLOR_BGR2GRAY, 0, core::AlgorithmHint::ALGO_HINT_DEFAULT)?;
     Ok(gray)
 }
 
@@ -111,7 +111,7 @@ fn detect_start_button(frame: &Mat, cfg: &EnchantDetectorConfig) -> opencv::Resu
     }
     let crop = Mat::roi(frame, rect)?;
     let mut hsv = Mat::default();
-    imgproc::cvt_color(&crop, &mut hsv, imgproc::COLOR_BGR2HSV, 0)?;
+    imgproc::cvt_color(&crop, &mut hsv, imgproc::COLOR_BGR2HSV, 0, core::AlgorithmHint::ALGO_HINT_DEFAULT)?;
     let mut channels = Vector::<Mat>::new();
     core::split(&hsv, &mut channels)?;
     let sat = channels.get(1)?;

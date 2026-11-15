@@ -125,7 +125,7 @@ fn score_cell(frame: &Mat, rect: Rect, config: &InventoryConfig) -> opencv::Resu
     let roi = Rect::new(rect.x + inset, rect.y + inset, rect.width - 2 * inset, rect.height - 2 * inset);
     let crop = Mat::roi(frame, roi)?;
     let mut gray = Mat::default();
-    imgproc::cvt_color(&crop, &mut gray, imgproc::COLOR_BGR2GRAY, 0)?;
+    imgproc::cvt_color(&crop, &mut gray, imgproc::COLOR_BGR2GRAY, 0, core::AlgorithmHint::ALGO_HINT_DEFAULT)?;
 
     let mut mean = Scalar::default();
     let mut stddev = Scalar::default();
@@ -140,7 +140,7 @@ fn score_cell(frame: &Mat, rect: Rect, config: &InventoryConfig) -> opencv::Resu
     ).clamp(0.0, 1.0);
 
     let mut hsv = Mat::default();
-    imgproc::cvt_color(&crop, &mut hsv, imgproc::COLOR_BGR2HSV, 0)?;
+    imgproc::cvt_color(&crop, &mut hsv, imgproc::COLOR_BGR2HSV, 0, core::AlgorithmHint::ALGO_HINT_DEFAULT)?;
     let mut channels = opencv::core::Vector::<Mat>::new();
     core::split(&hsv, &mut channels)?;
     let saturation = channels.get(1)?;

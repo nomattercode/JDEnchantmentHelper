@@ -44,9 +44,9 @@ pub fn save_png(path: impl AsRef<Path>, image: &Mat) -> Result<(), String> {
 pub fn mat_to_rgb(image: &Mat) -> opencv::Result<(usize, usize, Vec<u8>)> {
     let mut rgb = Mat::default();
     match image.channels() {
-        1 => imgproc::cvt_color(image, &mut rgb, imgproc::COLOR_GRAY2RGB, 0)?,
-        3 => imgproc::cvt_color(image, &mut rgb, imgproc::COLOR_BGR2RGB, 0)?,
-        4 => imgproc::cvt_color(image, &mut rgb, imgproc::COLOR_BGRA2RGB, 0)?,
+        1 => imgproc::cvt_color(image, &mut rgb, imgproc::COLOR_GRAY2RGB, 0, core::AlgorithmHint::ALGO_HINT_DEFAULT)?,
+        3 => imgproc::cvt_color(image, &mut rgb, imgproc::COLOR_BGR2RGB, 0, core::AlgorithmHint::ALGO_HINT_DEFAULT)?,
+        4 => imgproc::cvt_color(image, &mut rgb, imgproc::COLOR_BGRA2RGB, 0, core::AlgorithmHint::ALGO_HINT_DEFAULT)?,
         channels => {
             return Err(opencv::Error::new(
                 core::StsUnsupportedFormat,
