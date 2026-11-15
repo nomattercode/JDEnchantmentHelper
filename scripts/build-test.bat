@@ -72,8 +72,8 @@ cargo check --all-targets
 if errorlevel 1 exit /b 1
 
 echo.
-echo [3/4] Running tests...
-cargo test --all-targets
+echo [3/4] Running tests in Release configuration (matches the app build)...
+cargo test --release --all-targets
 if errorlevel 1 exit /b 1
 
 echo.
