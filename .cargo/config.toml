@@ -1,0 +1,5 @@
+[env]
+# Keep OpenCV/vcpkg discovery consistent for cargo build, cargo check,
+# cargo test, and IDE-triggered Cargo builds.
+VCPKGRS_TRIPLET = { value = "x64-windows", force = true }
+VCPKGRS_DYNAMIC = { value = "1", force = true }

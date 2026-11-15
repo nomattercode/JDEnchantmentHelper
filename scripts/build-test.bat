@@ -36,6 +36,9 @@ clang --version
 
 set "VCPKGRS_TRIPLET=x64-windows"
 set "VCPKGRS_DYNAMIC=1"
+echo [INFO] VCPKG_ROOT=%VCPKG_ROOT%
+echo [INFO] VCPKGRS_TRIPLET=%VCPKGRS_TRIPLET%
+echo [INFO] VCPKGRS_DYNAMIC=%VCPKGRS_DYNAMIC%
 set "PATH=%VCPKG_ROOT%\installed\x64-windows\bin;%PATH%"
 
 rem OpenCV 4.14 from vcpkg installs headers below include\opencv4\opencv2.
