@@ -34,19 +34,21 @@ set "VCPKGRS_TRIPLET=x64-windows"
 set "VCPKGRS_DYNAMIC=1"
 set "PATH=%VCPKG_ROOT%\installed\x64-windows\bin;%PATH%"
 
-if not exist "%VCPKG_ROOT%\installed\x64-windows\include\opencv2\core.hpp" (
-    echo [INFO] Installing OpenCV through vcpkg...
+rem OpenCV 4.14 from vcpkg installs headers below include\opencv4\opencv2.
+rem Older ports may use include\opencv2.
+set "OPENCV_INCLUDE_DIR="
+if exist "%VCPKG_ROOT%\installed\x64-windows\include\opencv2\core.hpp" set "OPENCV_INCLUDE_DIR=%VCPKG_ROOT%\installed\x64-windows\include"
+if not defined OPENCV_INCLUDE_DIR if exist "%VCPKG_ROOT%\installed\x64-windows\include\opencv4\opencv2\core.hpp" set "OPENCV_INCLUDE_DIR=%VCPKG_ROOT%\installed\x64-windows\include\opencv4"
+
+if not defined OPENCV_INCLUDE_DIR (
+    echo [INFO] OpenCV headers not found. Installing OpenCV through vcpkg...
     "%VCPKG_ROOT%\vcpkg.exe" install opencv4:x64-windows
     if errorlevel 1 (
         echo [ERROR] vcpkg failed to install OpenCV.
         exit /b 1
     )
-)
-rem OpenCV 4.14 from the vcpkg opencv4 port installs headers below
-rem include\opencv4\opencv2. Older ports may use include\opencv2.
-set "OPENCV_INCLUDE_DIR="
-for %%I in ("%VCPKG_ROOT%\installed\x64-windows\include" "%VCPKG_ROOT%\installed\x64-windows\include\opencv4") do (
-    if exist "%%~I\opencv2\core.hpp" set "OPENCV_INCLUDE_DIR=%%~I"
+    if exist "%VCPKG_ROOT%\installed\x64-windows\include\opencv2\core.hpp" set "OPENCV_INCLUDE_DIR=%VCPKG_ROOT%\installed\x64-windows\include"
+    if not defined OPENCV_INCLUDE_DIR if exist "%VCPKG_ROOT%\installed\x64-windows\include\opencv4\opencv2\core.hpp" set "OPENCV_INCLUDE_DIR=%VCPKG_ROOT%\installed\x64-windows\include\opencv4"
 )
 if not defined OPENCV_INCLUDE_DIR (
     echo [ERROR] OpenCV installation completed, but core.hpp was not found.
