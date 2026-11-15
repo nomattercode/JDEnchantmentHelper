@@ -86,7 +86,7 @@ pub fn list_visible_windows() -> Vec<GameWindow> {
 /// This is used only for the UI picker preview; it does not send any input.
 pub fn capture_window(handle: isize) -> Result<Mat, String> {
     let hwnd = handle as HWND;
-    let mut bounds = RECT::default();
+    let mut bounds = RECT { left: 0, top: 0, right: 0, bottom: 0 };
     if unsafe { GetWindowRect(hwnd, &mut bounds) } == 0 {
         return Err("Не удалось получить размеры окна; возможно, оно уже закрыто".into());
     }
