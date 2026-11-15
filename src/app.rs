@@ -588,25 +588,31 @@ impl EnchantmentHelperApp {
     fn game_window_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             ui.label("Игровое окно");
-            let selected = self.selected_label();
-            egui::ComboBox::from_id_salt("game_window")
-                .width((ui.available_width() - 100.0).max(180.0))
-                .selected_text(selected)
-                .show_ui(ui, |ui| {
-                    for window in &self.windows {
-                        let label = format!(
-                            "{} · PID {} · HWND 0x{:X} · {}×{}",
-                            window.title, window.process_id, window.handle, window.width, window.height
-                        );
-                        ui.selectable_value(
-                            &mut self.selected_window,
-                            Some(window.handle),
-                            label,
-                        );
-                    }
-                });
-            if ui.button("↻").on_hover_text("Обновить список окон").clicked() {
-                self.refresh_windows(ctx);
+            let selection_enabled = self.automation_phase.is_none();
+            ui.add_enabled_ui(selection_enabled, |ui| {
+                let selected = self.selected_label();
+                egui::ComboBox::from_id_salt("game_window")
+                    .width((ui.available_width() - 100.0).max(180.0))
+                    .selected_text(selected)
+                    .show_ui(ui, |ui| {
+                        for window in &self.windows {
+                            let label = format!(
+                                "{} · PID {} · HWND 0x{:X} · {}×{}",
+                                window.title, window.process_id, window.handle, window.width, window.height
+                            );
+                            ui.selectable_value(
+                                &mut self.selected_window,
+                                Some(window.handle),
+                                label,
+                            );
+                        }
+                    });
+                if ui.button("↻").on_hover_text("Обновить список окон").clicked() {
+                    self.refresh_windows(ctx);
+                }
+            });
+            if !selection_enabled {
+                ui.small("Выбор блокирован во время выполнения");
             }
         });
 

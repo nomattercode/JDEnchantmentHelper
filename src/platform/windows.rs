@@ -102,6 +102,9 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
     if unsafe { IsWindow(hwnd) } == 0 {
         return Err("Выбранное окно больше не существует".into());
     }
+    if unsafe { IsIconic(hwnd) } != 0 {
+        return Err("Игровое окно свёрнуто. Разверните его перед запуском автоматизации.".into());
+    }
 
     let mut bounds = RECT { left: 0, top: 0, right: 0, bottom: 0 };
     if unsafe { GetWindowRect(hwnd, &mut bounds) } == 0 {
@@ -251,8 +254,14 @@ pub fn click_window_point(handle: isize, x: i32, y: i32) -> Result<(), String> {
         ));
     }
 
+    if f12_pressed() {
+        return Err("Аварийная остановка F12 перед кликом".into());
+    }
     if unsafe { SetCursorPos(bounds.left + x, bounds.top + y) } == 0 {
         return Err("Windows не смогла переместить курсор к кнопке".into());
+    }
+    if f12_pressed() {
+        return Err("Аварийная остановка F12 перед кликом".into());
     }
 
     unsafe { mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0); }
