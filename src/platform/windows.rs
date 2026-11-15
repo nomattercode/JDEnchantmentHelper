@@ -121,7 +121,7 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
         return Err("CreateCompatibleBitmap завершился ошибкой".into());
     }
 
-    let mut selected_object: HGDIOBJ = core::ptr::null_mut();
+    let mut selected_object: HGDIOBJ = std::ptr::null_mut();
     let capture_result = (|| -> Result<Mat, String> {
         selected_object = unsafe { SelectObject(memory_dc, bitmap as HGDIOBJ) };
         if selected_object.is_null() {
@@ -137,7 +137,7 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
 
         // GetDIBits requires the bitmap to be deselected from the memory DC.
         unsafe { SelectObject(memory_dc, selected_object); }
-        selected_object = core::ptr::null_mut();
+        selected_object = std::ptr::null_mut();
 
         let mut info = BITMAPINFO::default();
         info.bmiHeader.biSize = std::mem::size_of_val(&info.bmiHeader) as u32;
