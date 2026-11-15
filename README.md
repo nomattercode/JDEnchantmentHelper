@@ -35,7 +35,7 @@ Run:
 scripts\build-test.bat
 ```
 
-The script performs `cargo fmt`, `cargo check --all-targets`, `cargo test --all-targets`, and `cargo build --release`. It places the vcpkg OpenCV DLL directory on PATH for the current script session. The executable is created at `target\release\jd-enchantment-helper.exe`.
+The script performs `cargo fmt`, `cargo check --all-targets`, `cargo test --release --all-targets`, and `cargo build --release`. Tests use the Release profile because the vcpkg OpenCV Debug libraries currently fail to link with the Rust-generated bindings on the Windows MSVC runner; the Release profile matches the executable build. It places the vcpkg OpenCV DLL directory on PATH for the current script session. The executable is created at `target\release\jd-enchantment-helper.exe`.
 
 ## Run screenshot diagnostics
 
