@@ -27,7 +27,7 @@ Prerequisites:
 1. Rust stable with the MSVC toolchain: https://rustup.rs
 2. Visual Studio Build Tools (C++ workload).
 3. LLVM/Clang (OpenCV's Rust binding generator needs Clang). For example: `choco install llvm -y`.
-4. vcpkg installed, with `VCPKG_ROOT` pointing to its directory. The build script installs `opencv4:x64-windows` automatically if it is not present.
+4. vcpkg installed, with `VCPKG_ROOT` pointing to its directory. The build script installs `opencv4:x64-windows` automatically if it is not present. It recognizes both vcpkg header layouts (`include\\opencv2` and `include\\opencv4\\opencv2`), including the nested layout used by current OpenCV 4.14 ports.
 
 Run:
 

@@ -42,10 +42,22 @@ if not exist "%VCPKG_ROOT%\installed\x64-windows\include\opencv2\core.hpp" (
         exit /b 1
     )
 )
-if not exist "%VCPKG_ROOT%\installed\x64-windows\include\opencv2\core.hpp" (
-    echo [ERROR] OpenCV headers are missing after installation.
+rem OpenCV 4.14 from the vcpkg opencv4 port installs headers below
+rem include\opencv4\opencv2. Older ports may use include\opencv2.
+set "OPENCV_INCLUDE_DIR="
+for %%I in ("%VCPKG_ROOT%\installed\x64-windows\include" "%VCPKG_ROOT%\installed\x64-windows\include\opencv4") do (
+    if exist "%%~I\opencv2\core.hpp" set "OPENCV_INCLUDE_DIR=%%~I"
+)
+if not defined OPENCV_INCLUDE_DIR (
+    echo [ERROR] OpenCV installation completed, but core.hpp was not found.
+    echo Checked:
+    echo   %VCPKG_ROOT%\installed\x64-windows\include\opencv2\core.hpp
+    echo   %VCPKG_ROOT%\installed\x64-windows\include\opencv4\opencv2\core.hpp
+    echo Inspect the installed include tree:
+    dir /s /b "%VCPKG_ROOT%\installed\x64-windows\include\core.hpp" 2^>nul
     exit /b 1
 )
+echo [INFO] OpenCV headers found: "%OPENCV_INCLUDE_DIR%\opencv2\core.hpp"
 
 echo.
 echo [1/4] Checking Rust formatting...
