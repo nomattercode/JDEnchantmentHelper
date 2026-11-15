@@ -25,6 +25,8 @@ pub struct GameWindow {
     pub handle: isize,
     pub title: String,
     pub process_id: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 pub const MAX_RUNS: u8 = 10;

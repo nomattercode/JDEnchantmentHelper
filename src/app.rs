@@ -1,8 +1,9 @@
 use eframe::egui;
 use opencv::prelude::*;
+use std::collections::HashMap;
 
 use crate::model::{GameWindow, RunState, MAX_RUNS};
-use crate::platform::list_visible_windows;
+use crate::platform::{capture_window, list_visible_windows};
 use crate::vision::{
     analyze_enchant_window, load_image, mat_to_rgb, save_png, scan_inventory,
     EnchantDetectorConfig, InventoryConfig,
@@ -14,6 +15,8 @@ enum Mode { Inventory, Enchant }
 pub struct EnchantmentHelperApp {
     windows: Vec<GameWindow>,
     selected_window: Option<isize>,
+    window_previews: HashMap<isize, egui::TextureHandle>,
+    window_preview_errors: HashMap<isize, String>,
     runs: u8,
     run_state: RunState,
     status: String,
@@ -32,7 +35,8 @@ pub struct EnchantmentHelperApp {
 impl Default for EnchantmentHelperApp {
     fn default() -> Self {
         Self {
-            windows: list_visible_windows(), selected_window: None, runs: 1,
+            windows: list_visible_windows(), selected_window: None,
+            window_previews: HashMap::new(), window_preview_errors: HashMap::new(), runs: 1,
             run_state: RunState::Idle,
             status: "Диагностика по файлам. Управление игрой отключено.".into(),
             image_path: String::new(), output_dir: "diagnostics".into(), mode: Mode::Inventory,
@@ -52,8 +56,38 @@ impl EnchantmentHelperApp {
 
     fn selected_label(&self) -> String {
         self.selected_window.and_then(|h| self.windows.iter().find(|w| w.handle == h))
-            .map(|w| format!("{} (PID {})", w.title, w.process_id))
+            .map(|w| format!("{} (PID {}, HWND 0x{:X})", w.title, w.process_id, w.handle))
             .unwrap_or_else(|| "Окно не выбрано".into())
+    }
+
+    fn refresh_windows(&mut self, ctx: &egui::Context) {
+        self.windows = list_visible_windows();
+        let valid: std::collections::HashSet<isize> = self.windows.iter().map(|w| w.handle).collect();
+        self.window_previews.retain(|h, _| valid.contains(h));
+        self.window_preview_errors.retain(|h, _| valid.contains(h));
+        if self.selected_window.is_some_and(|h| !valid.contains(&h)) { self.selected_window = None; }
+        for window in self.windows.clone() {
+            match capture_window(window.handle).and_then(|mat| {
+                let (w, h, pixels) = mat_to_rgb(&mat).map_err(|e| e.to_string())?;
+                Ok((w, h, pixels))
+            }) {
+                Ok((w, h, pixels)) => {
+                    let image = egui::ColorImage::from_rgb([w, h], &pixels);
+                    if let Some(texture) = self.window_previews.get_mut(&window.handle) {
+                        texture.set(image, egui::TextureOptions::LINEAR);
+                    } else {
+                        let texture = ctx.load_texture(format!("window-{}", window.handle), image, egui::TextureOptions::LINEAR);
+                        self.window_previews.insert(window.handle, texture);
+                    }
+                    self.window_preview_errors.remove(&window.handle);
+                }
+                Err(error) => {
+                    self.window_preview_errors.insert(window.handle, error.clone());
+                    self.log(format!("[window][0x{:X}] {error}", window.handle));
+                }
+            }
+        }
+        self.log(format!("[window] found {} visible windows", self.windows.len()));
     }
 
     fn set_preview(&mut self, ctx: &egui::Context, mat: &opencv::core::Mat) {
@@ -190,17 +224,41 @@ impl eframe::App for EnchantmentHelperApp {
         });
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.collapsing("Игровое окно и прогоны", |ui| {
+                ui.collapsing("Выбор игрового окна", |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Окно");
-                        if ui.button("Обновить").clicked() {
-                            self.windows = list_visible_windows();
-                            self.log(format!("[window] visible windows={}", self.windows.len()));
-                        }
-                        egui::ComboBox::from_id_salt("window").selected_text(self.selected_label()).show_ui(ui, |ui| {
-                            for w in &self.windows { ui.selectable_value(&mut self.selected_window, Some(w.handle), format!("{} (PID {})", w.title, w.process_id)); }
-                        });
+                        ui.label(format!("Найдено окон: {}", self.windows.len()));
+                        if ui.button("Обновить список и превью").clicked() { self.refresh_windows(ctx); }
                     });
+                    ui.label(format!("Выбрано: {}", self.selected_label()));
+                    let windows = self.windows.clone();
+                    ui.horizontal_wrapped(|ui| {
+                        for window in windows {
+                            ui.group(|ui| {
+                                let selected = self.selected_window == Some(window.handle);
+                                ui.set_min_width(220.0);
+                                ui.label(egui::RichText::new(&window.title).strong());
+                                ui.small(format!("PID {} · HWND 0x{:X}", window.process_id, window.handle));
+                                ui.small(format!("{} × {} px", window.width, window.height));
+                                if let Some(texture) = self.window_previews.get(&window.handle) {
+                                    let size = texture.size_vec2();
+                                    let scale = (200.0 / size.x.max(1.0)).min(112.0 / size.y.max(1.0)).min(1.0);
+                                    if ui.add(egui::Image::new((texture.id(), size * scale)).sense(egui::Sense::click())).clicked() {
+                                        self.selected_window = Some(window.handle);
+                                    }
+                                } else {
+                                    ui.allocate_ui(egui::vec2(200.0, 112.0), |ui| ui.centered_and_justified(|ui| {
+                                        ui.label(self.window_preview_errors.get(&window.handle).map(String::as_str).unwrap_or("Нажмите «Обновить превью»"));
+                                    }));
+                                }
+                                if ui.add_enabled(!selected, egui::Button::new(if selected { "Выбрано" } else { "Выбрать это окно" })).clicked() {
+                                    self.selected_window = Some(window.handle);
+                                }
+                                if selected { ui.colored_label(egui::Color32::LIGHT_GREEN, "Активный выбор"); }
+                            });
+                        }
+                    });
+                });
+                ui.collapsing("Прогоны", |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Прогонов");
                         egui::ComboBox::from_id_salt("runs").selected_text(self.runs.to_string()).show_ui(ui, |ui| {

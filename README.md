@@ -4,7 +4,8 @@ Rust desktop diagnostic application for analysing Jade Dynasty inventory and enc
 
 ## Current functionality
 
-- Select a visible top-level game window (selection only; live capture is not wired yet).
+- Enumerate visible top-level windows and select one exact HWND, even when several windows share the same process or title.
+- Show per-window preview cards with title, PID, HWND and dimensions. Refresh captures on demand using Windows GDI; previews are display-only.
 - Select 1–10 logical inventory passes.
 - Start / Pause / Stop UI state controls. **These buttons do not send input to the game.**
 - Inventory grid scanner using OpenCV:
@@ -18,7 +19,7 @@ Rust desktop diagnostic application for analysing Jade Dynasty inventory and enc
 - Diagnostic PNGs saved to `diagnostics/` (input frame, annotated overlay, score map).
 - Unicode screenshot paths are supported: image bytes are read by Rust and decoded by OpenCV, rather than relying on Windows ANSI path APIs.
 
-No game mouse/keyboard automation, live screen capture, inventory scrolling, or automatic enchantment cycle is implemented in this increment.
+No game mouse/keyboard automation, automatic enchantment cycle, or continuous live analysis is implemented. GDI window capture is used only to display picker previews. The dedicated «Начать» template detector still requires the updated screenshot archive; the supplied SwissTransfer link could not be downloaded from the development environment.
 
 ## Build on Windows 10
 
