@@ -44,7 +44,9 @@ jobs:
         run: cargo check --all-targets
 
       - name: Run tests
-        run: cargo test --all-targets
+        # OpenCV's vcpkg Debug libraries fail to link with the generated Rust bindings.
+        # Test in Release, matching the profile used for the distributed executable.
+        run: cargo test --release --all-targets
 
       - name: Build release
         run: cargo build --release
