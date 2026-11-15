@@ -29,6 +29,10 @@ if errorlevel 1 (
     echo Reopen this terminal and run this script again.
     exit /b 1
 )
+echo [INFO] Clang executable(s):
+where clang.exe
+echo [INFO] Clang version:
+clang --version
 
 set "VCPKGRS_TRIPLET=x64-windows"
 set "VCPKGRS_DYNAMIC=1"
