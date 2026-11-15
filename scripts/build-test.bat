@@ -49,7 +49,7 @@ if not exist "%VCPKG_ROOT%\installed\x64-windows\include\opencv2\core.hpp" (
 
 echo.
 echo [1/4] Checking Rust formatting...
-cargo fmt --all -- --check
+cargo fmt --all
 if errorlevel 1 exit /b 1
 
 echo.

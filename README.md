@@ -35,7 +35,7 @@ Run:
 scripts\build-test.bat
 ```
 
-The script performs `cargo fmt --check`, `cargo check --all-targets`, `cargo test --all-targets`, and `cargo build --release`. It places the vcpkg OpenCV DLL directory on PATH for the current script session. The executable is created at `target\release\jd-enchantment-helper.exe`.
+The script performs `cargo fmt`, `cargo check --all-targets`, `cargo test --all-targets`, and `cargo build --release`. It places the vcpkg OpenCV DLL directory on PATH for the current script session. The executable is created at `target\release\jd-enchantment-helper.exe`.
 
 ## Run screenshot diagnostics
 
