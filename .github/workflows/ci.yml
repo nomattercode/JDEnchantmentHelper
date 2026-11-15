@@ -37,6 +37,13 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Show toolchain versions
+        shell: pwsh
+        run: |
+          rustc --version --verbose
+          cargo --version
+          clang --version
+
       - name: Check formatting
         run: cargo fmt --all
 
