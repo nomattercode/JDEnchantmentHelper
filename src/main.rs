@@ -1,12 +1,13 @@
 mod app;
 mod model;
 mod platform;
+mod vision;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([560.0, 390.0])
-            .with_min_inner_size([480.0, 340.0]),
+            .with_inner_size([1040.0, 820.0])
+            .with_min_inner_size([820.0, 640.0]),
         ..Default::default()
     };
 
