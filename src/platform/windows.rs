@@ -11,6 +11,7 @@ use windows_sys::Win32::{
         GetWindowDC, ReleaseDC, SelectObject, BITMAPINFO, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC,
         HGDIOBJ, SRCCOPY,
     },
+    System::Threading::GetCurrentProcessId,
     UI::{
         Input::KeyboardAndMouse::{
             GetAsyncKeyState, mouse_event, MOUSEEVENTF_LEFTDOWN,
@@ -45,6 +46,10 @@ unsafe extern "system" fn collect_window(hwnd: HWND, parameter: isize) -> i32 {
     let title = String::from_utf16_lossy(&title_buffer[..copied as usize]);
     let mut process_id = 0_u32;
     GetWindowThreadProcessId(hwnd, &mut process_id);
+    // Never offer this helper's own UI window as a possible game target.
+    if process_id == GetCurrentProcessId() {
+        return 1;
+    }
 
     let mut bounds = RECT { left: 0, top: 0, right: 0, bottom: 0 };
     if GetWindowRect(hwnd, &mut bounds) == 0 {

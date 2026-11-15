@@ -103,8 +103,8 @@ impl EnchantmentHelperApp {
         self.selected_window_data()
             .map(|window| {
                 format!(
-                    "{} · PID {} · {}×{}",
-                    window.title, window.process_id, window.width, window.height
+                    "{} · PID {} · HWND 0x{:X} · {}×{}",
+                    window.title, window.process_id, window.handle, window.width, window.height
                 )
             })
             .unwrap_or_else(|| "Выберите окно игры…".into())
@@ -595,8 +595,8 @@ impl EnchantmentHelperApp {
                 .show_ui(ui, |ui| {
                     for window in &self.windows {
                         let label = format!(
-                            "{} · PID {} · {}×{}",
-                            window.title, window.process_id, window.width, window.height
+                            "{} · PID {} · HWND 0x{:X} · {}×{}",
+                            window.title, window.process_id, window.handle, window.width, window.height
                         );
                         ui.selectable_value(
                             &mut self.selected_window,
@@ -689,6 +689,27 @@ impl EnchantmentHelperApp {
                             self.status = "Область слишком мала. Выделите кнопку целиком.".into();
                         }
                     }
+                }
+                let roi = self.enchant.start_button_region;
+                if roi.is_configured() && raw_size.x > 0.0 && raw_size.y > 0.0 {
+                    let min = egui::pos2(
+                        response.rect.left()
+                            + (roi.x as f32 / raw_size.x) * response.rect.width(),
+                        response.rect.top()
+                            + (roi.y as f32 / raw_size.y) * response.rect.height(),
+                    );
+                    let max = egui::pos2(
+                        response.rect.left()
+                            + ((roi.x + roi.width) as f32 / raw_size.x) * response.rect.width(),
+                        response.rect.top()
+                            + ((roi.y + roi.height) as f32 / raw_size.y) * response.rect.height(),
+                    );
+                    let stroke = egui::Stroke::new(2.0, egui::Color32::GREEN);
+                    let painter = ui.painter();
+                    painter.line_segment([min, egui::pos2(max.x, min.y)], stroke);
+                    painter.line_segment([egui::pos2(max.x, min.y), max], stroke);
+                    painter.line_segment([max, egui::pos2(min.x, max.y)], stroke);
+                    painter.line_segment([egui::pos2(min.x, max.y), min], stroke);
                 }
                 ui.small(format!(
                     "Размер кадра: {}×{} px · координаты ROI задаются в пикселях исходного окна",
