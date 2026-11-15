@@ -3,16 +3,24 @@ use opencv::{
     imgproc,
     prelude::*,
 };
+use std::{thread, time::Duration};
 use windows_sys::Win32::{
     Foundation::{HWND, RECT},
     Graphics::Gdi::{
-        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-        GetDIBits, GetWindowDC, ReleaseDC, SelectObject, BITMAPINFO, BI_RGB,
-        DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ, SRCCOPY,
+        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits,
+        GetWindowDC, ReleaseDC, SelectObject, BITMAPINFO, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC,
+        HGDIOBJ, SRCCOPY,
     },
-    UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-        GetWindowThreadProcessId, IsWindowVisible,
+    UI::{
+        Input::KeyboardAndMouse::{
+            GetAsyncKeyState, mouse_event, SetCursorPos, MOUSEEVENTF_LEFTDOWN,
+            MOUSEEVENTF_LEFTUP, VK_F12,
+        },
+        WindowsAndMessaging::{
+            EnumWindows, GetForegroundWindow, GetWindowRect, GetWindowTextLengthW,
+            GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
+            SetForegroundWindow, ShowWindow, SW_RESTORE,
+        },
     },
 };
 
@@ -75,7 +83,8 @@ pub fn list_visible_windows() -> Vec<GameWindow> {
     }
 
     windows.sort_by(|a, b| {
-        a.process_id.cmp(&b.process_id)
+        a.process_id
+            .cmp(&b.process_id)
             .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
             .then_with(|| a.handle.cmp(&b.handle))
     });
@@ -83,9 +92,12 @@ pub fn list_visible_windows() -> Vec<GameWindow> {
 }
 
 /// Captures a top-level window into a BGR OpenCV Mat using Windows GDI.
-/// This is used only for the UI picker preview; it does not send any input.
 pub fn capture_window(handle: isize) -> Result<Mat, String> {
     let hwnd = handle as HWND;
+    if unsafe { IsWindow(hwnd) } == 0 {
+        return Err("Выбранное окно больше не существует".into());
+    }
+
     let mut bounds = RECT { left: 0, top: 0, right: 0, bottom: 0 };
     if unsafe { GetWindowRect(hwnd, &mut bounds) } == 0 {
         return Err("Не удалось получить размеры окна; возможно, оно уже закрыто".into());
@@ -98,7 +110,7 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
     }
     let pixel_count = i64::from(width) * i64::from(height);
     if pixel_count > 40_000_000 {
-        return Err(format!("Слишком большое окно для превью: {width}x{height}"));
+        return Err(format!("Слишком большое окно для захвата: {width}x{height}"));
     }
 
     let window_dc: HDC = unsafe { GetWindowDC(hwnd) };
@@ -128,9 +140,7 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
             return Err("SelectObject не смог выбрать bitmap".into());
         }
 
-        let copied = unsafe {
-            BitBlt(memory_dc, 0, 0, width, height, window_dc, 0, 0, SRCCOPY)
-        };
+        let copied = unsafe { BitBlt(memory_dc, 0, 0, width, height, window_dc, 0, 0, SRCCOPY) };
         if copied == 0 {
             return Err("BitBlt не смог получить изображение окна".into());
         }
@@ -139,11 +149,9 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
         unsafe { SelectObject(memory_dc, selected_object); }
         selected_object = std::ptr::null_mut();
 
-        // BITMAPINFO is a Win32 C data structure; zero is a valid initial state for all fields.
         let mut info: BITMAPINFO = unsafe { std::mem::zeroed() };
         info.bmiHeader.biSize = std::mem::size_of_val(&info.bmiHeader) as u32;
         info.bmiHeader.biWidth = width;
-        // Negative height requests top-down rows, matching OpenCV's image layout.
         info.bmiHeader.biHeight = -height;
         info.bmiHeader.biPlanes = 1;
         info.bmiHeader.biBitCount = 32;
@@ -151,8 +159,8 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
 
         let byte_count = usize::try_from(pixel_count)
             .ok()
-            .and_then(|n| n.checked_mul(4))
-            .ok_or_else(|| "Размер буфера превью переполнен".to_string())?;
+            .and_then(|count| count.checked_mul(4))
+            .ok_or_else(|| "Размер буфера изображения переполнен".to_string())?;
         let mut pixels = vec![0_u8; byte_count];
         let lines = unsafe {
             GetDIBits(
@@ -166,14 +174,14 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
             )
         };
         if lines == 0 {
-            return Err("GetDIBits не смог прочитать пиксели окна".into());
+            return Err("GetDIBits не смог прочитать пиксели".into());
         }
 
         let bgra = Mat::new_rows_cols_with_default(height, width, CV_8UC4, Scalar::all(0.0))
-            .map_err(|e| format!("OpenCV: {e}"))?;
+            .map_err(|error| format!("OpenCV: {error}"))?;
         let mut bgra = bgra;
         bgra.data_bytes_mut()
-            .map_err(|e| format!("OpenCV: {e}"))?
+            .map_err(|error| format!("OpenCV: {error}"))?
             .copy_from_slice(&pixels);
 
         let mut bgr = Mat::default();
@@ -184,7 +192,7 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
             0,
             core::AlgorithmHint::ALGO_HINT_DEFAULT,
         )
-        .map_err(|e| format!("OpenCV: {e}"))?;
+        .map_err(|error| format!("OpenCV: {error}"))?;
         Ok(bgr)
     })();
 
@@ -198,4 +206,52 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
     }
 
     capture_result
+}
+
+/// Global F12 check. The application polls this while automation is armed.
+pub fn f12_pressed() -> bool {
+    unsafe { GetAsyncKeyState(VK_F12 as i32) < 0 }
+}
+
+/// Brings the selected game window forward and emits one physical-style left click.
+/// Coordinates are relative to the captured top-level window rectangle.
+pub fn click_window_point(handle: isize, x: i32, y: i32) -> Result<(), String> {
+    let hwnd = handle as HWND;
+    if unsafe { IsWindow(hwnd) } == 0 {
+        return Err("Выбранное игровое окно закрыто".into());
+    }
+
+    if unsafe { IsIconic(hwnd) } != 0 {
+        unsafe { ShowWindow(hwnd, SW_RESTORE); }
+    }
+    unsafe { SetForegroundWindow(hwnd); }
+    thread::sleep(Duration::from_millis(120));
+
+    if unsafe { GetForegroundWindow() } != hwnd {
+        return Err(
+            "Windows не передала фокус игровому окну. Переключитесь в игру вручную и повторите запуск."
+                .into(),
+        );
+    }
+
+    let mut bounds = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    if unsafe { GetWindowRect(hwnd, &mut bounds) } == 0 {
+        return Err("Не удалось получить координаты игрового окна".into());
+    }
+    let width = bounds.right - bounds.left;
+    let height = bounds.bottom - bounds.top;
+    if x < 0 || y < 0 || x >= width || y >= height {
+        return Err(format!(
+            "Точка клика ({x}, {y}) выходит за границы окна {width}x{height}"
+        ));
+    }
+
+    if unsafe { SetCursorPos(bounds.left + x, bounds.top + y) } == 0 {
+        return Err("Windows не смогла переместить курсор к кнопке".into());
+    }
+
+    unsafe { mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0); }
+    thread::sleep(Duration::from_millis(55));
+    unsafe { mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0); }
+    Ok(())
 }
