@@ -50,6 +50,7 @@ pub struct EnchantmentHelperApp {
     attempted_items: HashSet<(u8, u8)>,
     amulet_slot: Option<CellDebug>,
     current_item: Option<CellDebug>,
+    last_start_button: Option<Region>,
     status: String,
     image_path: String,
     output_dir: String,
@@ -87,6 +88,7 @@ impl Default for EnchantmentHelperApp {
             attempted_items: HashSet::new(),
             amulet_slot: None,
             current_item: None,
+            last_start_button: None,
             status: "Выберите окно игры и один раз выделите область сетки инвентаря.".into(),
             image_path: String::new(),
             output_dir: "diagnostics".into(),
@@ -654,6 +656,38 @@ impl EnchantmentHelperApp {
         self.set_preview(ctx, &analysis.overlay);
 
         if let Some(button) = &analysis.start_button {
+            let detected = Region {
+                x: button.rect.x,
+                y: button.rect.y,
+                width: button.rect.width,
+                height: button.rect.height,
+            };
+            if self.last_start_button != Some(detected) {
+                self.last_start_button = Some(detected);
+                let path = std::path::Path::new(&self.output_dir)
+                    .join("start_button_last_seen.txt");
+                let saved = (|| -> Result<(), String> {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|error| format!("Не удалось создать папку координат: {error}"))?;
+                    }
+                    std::fs::write(
+                        &path,
+                        format!(
+                            "window=0x{handle:X}\nx={}\ny={}\nwidth={}\nheight={}\n",
+                            detected.x, detected.y, detected.width, detected.height
+                        ),
+                    )
+                    .map_err(|error| format!("Не удалось сохранить координаты START: {error}"))
+                })();
+                match saved {
+                    Ok(()) => self.log(format!(
+                        "[automation] saved START coordinates to {}",
+                        path.display()
+                    )),
+                    Err(error) => self.log(format!("[automation] {error}")),
+                }
+            }
             self.summary = format!(
                 "START: {} · синий {:.0}% · OK {:.3} · предмет r{}c{} · прогон {}/{}",
                 if button.active { "активна" } else { "неактивна" },
@@ -953,6 +987,12 @@ impl EnchantmentHelperApp {
             ui.add(egui::DragValue::new(&mut region.height).range(0..=2000));
             ui.end_row();
         });
+        if let Some(region) = self.last_start_button {
+            ui.small(format!(
+                "Последнее найденное положение START: ({}, {}) · {}×{} px",
+                region.x, region.y, region.width, region.height
+            ));
+        }
         if !region.is_configured() {
             ui.label("Ручная область не задана — используется автоматический поиск по шаблону.");
         } else {
@@ -1005,6 +1045,7 @@ impl EnchantmentHelperApp {
                 self.amulet_slot = None;
                 self.current_item = None;
                 self.enchant.start_button_region = Region::default();
+                self.last_start_button = None;
                 self.status = "Окно изменено. Повторно выделите сетку инвентаря; START будет найден по шаблону.".into();
                 self.capture_selected_preview(ctx);
                 self.log("[window] target changed; old ROI coordinates cleared");

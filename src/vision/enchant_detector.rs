@@ -10,7 +10,7 @@ const SUCCESS_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_succes
 const FAILURE_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_failure.png");
 const START_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/start_button_active.png");
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Region {
     pub x: i32,
     pub y: i32,
