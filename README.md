@@ -25,7 +25,7 @@ The logical inventory table in the UI shows the amulet, available items, attempt
 
 ## Important calibration limits
 
-The supplied reference image shows the enchantment dialog only; it does **not** show the inventory grid. Therefore the Start button has a trained template, but inventory-panel detection is not trained from this file. The inventory grid must currently be selected manually on the live preview once per application session. The grid shape defaults to 6×8 with 90% cell-to-step ratio; adjust X/Y, cell dimensions, spacing, start cell, amulet cell and occupancy threshold to match the actual game UI.
+The supplied reference image trains two templates: the enchantment title bar and the active Start button. It does **not** show the inventory grid. Therefore inventory-panel detection is not trained from this file; the complete grid must currently be selected manually on the live preview once per application session. The grid shape defaults to 6×8 with 90% cell-to-step ratio; adjust X/Y, cell dimensions, spacing, start cell, amulet cell and occupancy threshold to match the actual game UI.
 
 The scanner classifies cells from image texture/edge/saturation scores, not item identity. Keep the inventory stable while scanning; do not sort or move items during an automated series. If the inventory changes layout, stop and rescan/recalibrate before continuing.
 

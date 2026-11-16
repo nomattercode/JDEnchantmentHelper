@@ -1058,7 +1058,7 @@ impl EnchantmentHelperApp {
 
         ui.separator();
         ui.label(egui::RichText::new("Кнопка «Начать»").strong());
-        ui.label("Автоматический поиск по шаблону, взятому из загруженного кадра. Поиск отличает «Начать» от соседних «Купить» и «Закрыть»; синий цвет подтверждает активность.");
+        ui.label("Сначала ищется заголовок окна «Зачарование», затем внутри него — шаблон кнопки «Начать». Это отличает Start от соседних «Купить» и «Закрыть»; синий цвет подтверждает готовность.");
         ui.add(
             egui::Slider::new(&mut config.start_template_threshold, 0.45..=0.98)
                 .step_by(0.01)
@@ -1176,7 +1176,7 @@ impl EnchantmentHelperApp {
                 self.capture_selected_preview(ctx);
             }
         });
-        ui.small("START ищется по шаблону автоматически. Для инвентаря один раз выделите всю сетку от первой до последней ячейки.");
+        ui.small("Окно зачарования и START ищутся по шаблонам автоматически. Для инвентаря пока требуется один раз выделить всю сетку от первой до последней ячейки.");
 
         if let Some(handle) = self.selected_window {
             if let Some(texture) = self.window_previews.get(&handle) {
