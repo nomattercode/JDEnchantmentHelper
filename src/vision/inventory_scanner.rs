@@ -1,5 +1,5 @@
 use opencv::{
-    core::{self, Mat, Point, Rect, Scalar},
+    core::{self, Mat, Rect, Scalar},
     imgproc,
     prelude::*,
 };
@@ -64,28 +64,6 @@ impl Default for InventoryConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CellKind { Amulet, BeforeStart, Occupied, Empty, OutOfFrame }
 
-impl CellKind {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Amulet => "АМУЛЕТ",
-            Self::BeforeStart => "ПРОПУСК",
-            Self::Occupied => "ПРЕДМЕТ",
-            Self::Empty => "ПУСТО",
-            Self::OutOfFrame => "ВНЕ КАДРА",
-        }
-    }
-
-    fn color(self) -> Scalar {
-        match self {
-            Self::Amulet => Scalar::new(0.0, 165.0, 255.0, 0.0),
-            Self::BeforeStart => Scalar::new(110.0, 110.0, 110.0, 0.0),
-            Self::Occupied => Scalar::new(40.0, 220.0, 40.0, 0.0),
-            Self::Empty => Scalar::new(40.0, 80.0, 240.0, 0.0),
-            Self::OutOfFrame => Scalar::new(180.0, 180.0, 180.0, 0.0),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct CellDebug {
     pub row: u8,
@@ -100,9 +78,6 @@ pub struct InventoryScan {
     pub cells: Vec<CellDebug>,
     /// Occupied cells at/after the start point, excluding the amulet cell.
     pub candidates: Vec<CellDebug>,
-    pub overlay: Mat,
-    pub score_map: Mat,
-    pub log: Vec<String>,
 }
 
 fn cell_rect(config: &InventoryConfig, row: u8, col: u8) -> Rect {
@@ -154,17 +129,6 @@ fn score_cell(frame: &Mat, rect: Rect, config: &InventoryConfig) -> opencv::Resu
     })
 }
 
-fn draw_cell(image: &mut Mat, cell: &CellDebug) -> opencv::Result<()> {
-    imgproc::rectangle(image, cell.rect, cell.kind.color(), 1, imgproc::LINE_8, 0)?;
-    let label = format!("{} {:.2}", cell.kind.label(), cell.score);
-    imgproc::put_text(
-        image, &label,
-        Point::new(cell.rect.x, (cell.rect.y + 10).min(image.rows().saturating_sub(2))),
-        imgproc::FONT_HERSHEY_PLAIN, 0.65, cell.kind.color(), 1, imgproc::LINE_AA, false,
-    )?;
-    Ok(())
-}
-
 pub fn scan_inventory(frame: &Mat, config: &InventoryConfig) -> opencv::Result<InventoryScan> {
     if frame.empty() {
         return Err(opencv::Error::new(core::StsBadArg, "Входной кадр пуст"));
@@ -176,23 +140,14 @@ pub fn scan_inventory(frame: &Mat, config: &InventoryConfig) -> opencv::Result<I
         return Err(opencv::Error::new(core::StsBadArg, "Шаг сетки не может быть меньше размера ячейки"));
     }
 
-    let mut overlay = frame.try_clone()?;
-    let mut score_map = Mat::zeros(frame.rows(), frame.cols(), core::CV_8UC1)?.to_mat()?;
     let mut cells = Vec::with_capacity(usize::from(config.columns) * usize::from(config.rows));
     let mut candidates = Vec::new();
-    let mut log = vec![format!(
-        "[inventory] frame={}x{} grid={}x{} origin=({}, {}) cell={}x{} step={}x{} method={:?} threshold={:.3}",
-        frame.cols(), frame.rows(), config.columns, config.rows, config.origin_x, config.origin_y,
-        config.cell_width, config.cell_height, config.step_x, config.step_y, config.method, config.threshold
-    )];
 
     for row in 0..config.rows {
         for col in 0..config.columns {
             let rect = cell_rect(config, row, col);
             if !inside_frame(rect, frame) {
                 let cell = CellDebug { row, col, rect, score: 0.0, kind: CellKind::OutOfFrame };
-                log.push(format!("[inventory] r{}c{} outside frame", row + 1, col + 1));
-                draw_cell(&mut overlay, &cell)?;
                 cells.push(cell);
                 continue;
             }
@@ -206,26 +161,13 @@ pub fn scan_inventory(frame: &Mat, config: &InventoryConfig) -> opencv::Result<I
                 else if score >= config.threshold { CellKind::Occupied }
                 else { CellKind::Empty };
 
-            let intensity = (score * 255.0).round().clamp(0.0, 255.0);
-            imgproc::rectangle(&mut score_map, rect, Scalar::all(intensity), imgproc::FILLED, imgproc::LINE_8, 0)?;
             let cell = CellDebug { row, col, rect, score, kind };
-            log.push(format!(
-                "[inventory] r{}c{} score={:.3} threshold={:.3} => {} rect=({}, {}, {}, {})",
-                row + 1, col + 1, score, config.threshold, kind.label(),
-                rect.x, rect.y, rect.width, rect.height
-            ));
             if kind == CellKind::Occupied { candidates.push(cell.clone()); }
-            draw_cell(&mut overlay, &cell)?;
             cells.push(cell);
         }
     }
 
-    log.push(format!(
-        "[inventory] candidates={} amulet=r{}c{} start=r{}c{}",
-        candidates.len(), config.amulet_row + 1, config.amulet_col + 1,
-        config.start_row + 1, config.start_col + 1
-    ));
-    Ok(InventoryScan { cells, candidates, overlay, score_map, log })
+    Ok(InventoryScan { cells, candidates })
 }
 
 #[cfg(test)]
