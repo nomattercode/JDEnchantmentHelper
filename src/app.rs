@@ -425,6 +425,15 @@ impl EnchantmentHelperApp {
         Ok(())
     }
 
+    fn refresh_current_page_fingerprint(
+        &mut self,
+        frame: &opencv::core::Mat,
+    ) -> Result<(), String> {
+        self.current_page_fingerprint =
+            Some(inventory_page_fingerprint(frame, self.inventory_grid_region)?);
+        Ok(())
+    }
+
     fn next_unprocessed_item(&self) -> Option<CellDebug> {
         self.logical_inventory
             .iter()
@@ -920,6 +929,10 @@ impl EnchantmentHelperApp {
                     return;
                 }
 
+                if let Err(error) = self.refresh_current_page_fingerprint(&frame) {
+                    self.stop_automation(&format!("Не удалось обновить отпечаток текущей страницы: {error}"));
+                    return;
+                }
                 let x = self.inventory_grid_region.x + self.inventory_grid_region.width / 2;
                 let y = self.inventory_grid_region.y + self.inventory_grid_region.height / 2;
                 if let Err(error) = scroll_window(handle, x, y, 120) {
@@ -996,6 +1009,10 @@ impl EnchantmentHelperApp {
                     return;
                 }
 
+                if let Err(error) = self.refresh_current_page_fingerprint(&frame) {
+                    self.stop_automation(&format!("Не удалось обновить отпечаток текущей страницы: {error}"));
+                    return;
+                }
                 let x = self.inventory_grid_region.x + self.inventory_grid_region.width / 2;
                 let y = self.inventory_grid_region.y + self.inventory_grid_region.height / 2;
                 if let Err(error) = scroll_window(handle, x, y, -120) {
@@ -1071,6 +1088,10 @@ impl EnchantmentHelperApp {
                     return;
                 }
 
+                if let Err(error) = self.refresh_current_page_fingerprint(&frame) {
+                    self.stop_automation(&format!("Не удалось обновить отпечаток текущей страницы: {error}"));
+                    return;
+                }
                 let x = self.inventory_grid_region.x + self.inventory_grid_region.width / 2;
                 let y = self.inventory_grid_region.y + self.inventory_grid_region.height / 2;
                 if let Err(error) = scroll_window(handle, x, y, 120) {
