@@ -662,6 +662,7 @@ impl EnchantmentHelperApp {
                 self.runs
             );
             if self.last_wait_log.elapsed() >= Duration::from_secs(10) {
+                self.last_wait_log = now;
                 self.log(format!(
                     "[automation] Start template matched at ({},{},{},{}) active={} blue_ratio={:.3}",
                     button.rect.x, button.rect.y, button.rect.width, button.rect.height,
@@ -766,6 +767,55 @@ impl EnchantmentHelperApp {
             }
             _ => {}
         }
+    }
+
+    fn logical_inventory_ui(&self, ui: &mut egui::Ui) {
+        if self.logical_inventory.is_empty() {
+            ui.label("Таблица пока не построена. Она создаётся при нажатии «Начать зачарование».");
+            return;
+        }
+
+        ui.label(format!(
+            "{} строк × {} столбцов · значок ✓ — уже обработанный предмет",
+            self.inventory.rows, self.inventory.columns
+        ));
+        egui::Grid::new("logical_inventory_table")
+            .spacing(egui::vec2(8.0, 4.0))
+            .show(ui, |ui| {
+                for row in 0..self.inventory.rows {
+                    for col in 0..self.inventory.columns {
+                        let cell = self
+                            .logical_inventory
+                            .iter()
+                            .find(|cell| cell.row == row && cell.col == col);
+
+                        let (symbol, color, hint) = match cell {
+                            Some(cell) if cell.kind == CellKind::Amulet => {
+                                ("A", egui::Color32::YELLOW, "Амулет")
+                            }
+                            Some(cell) if cell.kind == CellKind::Occupied
+                                && self.attempted_items.contains(&(row, col)) =>
+                            {
+                                ("✓", egui::Color32::LIGHT_GRAY, "Уже обработан; повторно не нажимается")
+                            }
+                            Some(cell) if cell.kind == CellKind::Occupied => {
+                                ("●", egui::Color32::LIGHT_GREEN, "Предмет доступен")
+                            }
+                            Some(cell) if cell.kind == CellKind::BeforeStart => {
+                                ("—", egui::Color32::GRAY, "До стартовой позиции")
+                            }
+                            Some(cell) if cell.kind == CellKind::OutOfFrame => {
+                                ("?", egui::Color32::GRAY, "Вне кадра")
+                            }
+                            Some(_) => ("·", egui::Color32::LIGHT_RED, "Пусто"),
+                            None => ("?", egui::Color32::GRAY, "Ячейка не просканирована"),
+                        };
+                        ui.colored_label(color, egui::RichText::new(symbol).strong().monospace())
+                            .on_hover_text(format!("Строка {}, столбец {}: {hint}", row + 1, col + 1));
+                    }
+                    ui.end_row();
+                }
+            });
     }
 
     fn inventory_ui(&mut self, ui: &mut egui::Ui) {
@@ -1240,6 +1290,10 @@ impl eframe::App for EnchantmentHelperApp {
                 ui.group(|ui| {
                     ui.label(egui::RichText::new(&self.status).strong());
                     ui.label(&self.summary);
+                });
+
+                ui.collapsing("Логическая таблица инвентаря", |ui| {
+                    self.logical_inventory_ui(ui);
                 });
 
                 ui.collapsing("Распознавание и калибровка", |ui| {
