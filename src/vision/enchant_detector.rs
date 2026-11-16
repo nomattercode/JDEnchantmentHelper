@@ -287,6 +287,24 @@ pub fn analyze_enchant_window(
     frame: &Mat,
     cfg: &EnchantDetectorConfig,
 ) -> opencv::Result<EnchantAnalysis> {
+    analyze_enchant_window_inner(frame, cfg, false)
+}
+
+/// Result-screen mode searches the whole captured game window for OK.
+/// It is used only after Start was clicked, when the game may replace or cover
+/// the enchant dialog with a separate result popup.
+pub fn analyze_enchant_result(
+    frame: &Mat,
+    cfg: &EnchantDetectorConfig,
+) -> opencv::Result<EnchantAnalysis> {
+    analyze_enchant_window_inner(frame, cfg, true)
+}
+
+fn analyze_enchant_window_inner(
+    frame: &Mat,
+    cfg: &EnchantDetectorConfig,
+    search_ok_full_frame: bool,
+) -> opencv::Result<EnchantAnalysis> {
     if frame.empty() {
         return Err(opencv::Error::new(core::StsBadArg, "Входной кадр пуст"));
     }
@@ -396,6 +414,78 @@ pub fn analyze_enchant_window(
         log.push("[enchant] enchant dialog header not found; Start/OK clicks are disabled".into());
     }
 
+    if search_ok_full_frame {
+        let search_rect = if let Some(region) = cfg.search_region {
+            clip_region(region, frame).ok_or_else(|| {
+                opencv::Error::new(core::StsBadArg, "Область поиска OK вне кадра")
+            })?
+        } else {
+            Rect::new(0, 0, frame.cols(), frame.rows())
+        };
+        let search = Mat::roi(frame, search_rect)?.try_clone()?;
+        let source = grayscale(&search)?;
+        let success = grayscale(&decode_image(SUCCESS_TEMPLATE)?)?;
+        let failure = grayscale(&decode_image(FAILURE_TEMPLATE)?)?;
+
+        let mut best = match_template(
+            &source,
+            &success,
+            "ok_success",
+            cfg,
+            cfg.confidence_threshold,
+        )?;
+        let failure_match = match_template(
+            &source,
+            &failure,
+            "ok_failure",
+            cfg,
+            cfg.confidence_threshold,
+        )?;
+        if failure_match.score > best.score {
+            best = failure_match;
+        }
+        if let Some(rect) = &mut best.rect {
+            rect.x += search_rect.x;
+            rect.y += search_rect.y;
+        }
+
+        // Prefer the strongest whole-frame match. This covers both cases:
+        // an OK button inside the enchant dialog and a separate result popup
+        // elsewhere on the game surface.
+        if best.score > ok_button.score {
+            ok_button = best;
+        }
+
+        log.push(format!(
+            "[enchant] full-frame result search: template={} score={:.4} threshold={:.3} found={} rect={:?}",
+            ok_button.template_name,
+            ok_button.score,
+            cfg.confidence_threshold,
+            ok_button.found,
+            ok_button.rect
+        ));
+
+        if let Some(rect) = ok_button.rect {
+            let color = if ok_button.found {
+                Scalar::new(0.0, 220.0, 0.0, 0.0)
+            } else {
+                Scalar::new(0.0, 180.0, 255.0, 0.0)
+            };
+            imgproc::rectangle(&mut overlay, rect, color, 2, imgproc::LINE_8, 0)?;
+            imgproc::put_text(
+                &mut overlay,
+                &format!("{} {:.3}", ok_button.template_name, ok_button.score),
+                Point::new(rect.x, (rect.y - 5).max(14)),
+                imgproc::FONT_HERSHEY_SIMPLEX,
+                0.45,
+                color,
+                1,
+                imgproc::LINE_AA,
+                false,
+            )?;
+        }
+    }
+
     if let Some(button) = &start_button {
         let color = if button.active {
             Scalar::new(0.0, 220.0, 0.0, 0.0)
@@ -460,6 +550,40 @@ mod tests {
         start.copy_to(&mut start_roi).unwrap();
 
         frame
+    }
+
+    #[test]
+    fn result_ok_is_found_outside_enchant_dialog() {
+        let mut frame = Mat::new_rows_cols_with_default(
+            500,
+            340,
+            core::CV_8UC3,
+            Scalar::new(28.0, 35.0, 42.0, 0.0),
+        )
+        .unwrap();
+
+        let header = decode_image(ENCHANT_HEADER_TEMPLATE).unwrap();
+        let mut header_roi = Mat::roi_mut(&mut frame, Rect::new(25, 7, 299, 23)).unwrap();
+        header.copy_to(&mut header_roi).unwrap();
+
+        let ok = decode_image(SUCCESS_TEMPLATE).unwrap();
+        let mut ok_roi = Mat::roi_mut(&mut frame, Rect::new(350, 240, ok.cols(), ok.rows())).unwrap();
+        ok.copy_to(&mut ok_roi).unwrap();
+
+        let cfg = EnchantDetectorConfig {
+            confidence_threshold: 0.95,
+            scale_min: 1.0,
+            scale_max: 1.0,
+            scale_step: 0.05,
+            ..Default::default()
+        };
+        let result = analyze_enchant_result(&frame, &cfg).unwrap();
+        assert!(result.dialog_window.is_some());
+        assert!(result.ok_button.found, "score={}", result.ok_button.score);
+        assert_eq!(
+            result.ok_button.rect,
+            Some(Rect::new(350, 240, ok.cols(), ok.rows()))
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ use crate::platform::{
     right_click_window_point,
 };
 use crate::vision::{
-    analyze_enchant_window, load_image, mat_to_rgb, save_png, scan_inventory,
+    analyze_enchant_result, analyze_enchant_window, load_image, mat_to_rgb, save_png, scan_inventory,
     inventory_scanner::{CellDebug, CellKind, InventoryScan},
     EnchantDetectorConfig, InventoryConfig, Region,
 };
@@ -893,7 +893,12 @@ impl EnchantmentHelperApp {
             return;
         }
 
-        let analysis = match analyze_enchant_window(&frame, &self.enchant) {
+        let analysis_result = if phase == Some(AutomationPhase::WaitingForOk) {
+            analyze_enchant_result(&frame, &self.enchant)
+        } else {
+            analyze_enchant_window(&frame, &self.enchant)
+        };
+        let analysis = match analysis_result {
             Ok(analysis) => analysis,
             Err(error) => {
                 self.stop_automation(&format!("Ошибка анализа OpenCV: {error}"));
