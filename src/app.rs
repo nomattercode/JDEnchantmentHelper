@@ -1091,7 +1091,7 @@ impl EnchantmentHelperApp {
 
     fn logical_inventory_ui(&self, ui: &mut egui::Ui) {
         if self.logical_inventory.is_empty() {
-            ui.label("Таблица пока не построена. Она создаётся при нажатии «Начать зачарование».");
+            ui.label("Таблица пока не построена. Нажмите «Сканировать инвентарь» для просмотра без игровых кликов.");
             return;
         }
 
