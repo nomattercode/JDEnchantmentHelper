@@ -275,7 +275,7 @@ pub fn scroll_window(handle: isize, x: i32, y: i32, wheel_delta: i32) -> Result<
         return Err("Не удалось переместить курсор в область инвентаря.".into());
     }
 
-    unsafe { mouse_event(MOUSEEVENTF_WHEEL, 0, 0, wheel_delta as u32, 0); }
+    unsafe { mouse_event(MOUSEEVENTF_WHEEL, 0, 0, wheel_delta, 0); }
     thread::sleep(Duration::from_millis(35));
     unsafe { SetCursorPos(previous_cursor.x, previous_cursor.y); }
 
