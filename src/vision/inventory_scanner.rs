@@ -147,8 +147,11 @@ mod tests {
         c.start_row = 0; c.start_col = 0;
         let frame = Mat::new_rows_cols_with_default(430, 320, core::CV_8UC3, Scalar::all(0.0)).unwrap();
         let scan = scan_inventory(&frame, &c).unwrap();
-        assert!(scan.cells.iter().any(|x| x.kind == CellKind::Amulet));
-        assert!(!scan.candidates.iter().any(|x| x.row == 0 && x.col == 0));
+        let amulet = scan.cells.iter().find(|x| x.row == 0 && x.col == 0);
+        assert!(amulet.is_some_and(|cell| cell.kind == CellKind::Amulet));
+        assert!(!scan.cells.iter().any(|cell| {
+            cell.row == 0 && cell.col == 0 && cell.kind == CellKind::Occupied
+        }));
     }
 
     #[test]

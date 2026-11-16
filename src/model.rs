@@ -22,7 +22,7 @@ pub const MAX_PASSES: u8 = 10;
 
 #[cfg(test)]
 mod tests {
-    use super::{RunState, MAX_PASSES};
+    use super::MAX_PASSES;
 
     #[test]
     fn pass_limit_is_ten() {
