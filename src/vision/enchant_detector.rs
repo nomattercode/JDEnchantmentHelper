@@ -8,6 +8,8 @@ use crate::vision::image_io::decode_image;
 
 const SUCCESS_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_success.png");
 const FAILURE_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_failure.png");
+const RESULT_OK_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_button_reference.png");
+const RESULT_OK_THRESHOLD: f64 = 0.94;
 const START_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/start_button_active.png");
 const ENCHANT_HEADER_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/enchant_header.png");
 
@@ -170,15 +172,15 @@ fn intersect_rects(left: Rect, right: Rect) -> Option<Rect> {
     (x2 > x1 && y2 > y1).then(|| Rect::new(x1, y1, x2 - x1, y2 - y1))
 }
 
-/// Restrict result-popup detection to the central two-thirds of the game frame.
+/// Restrict result-popup detection to a 200x200 area in the game-frame center.
 fn centered_result_region(frame: &Mat) -> Rect {
-    let margin_x = frame.cols() / 6;
-    let margin_y = frame.rows() / 6;
+    let width = frame.cols().min(200).max(1);
+    let height = frame.rows().min(200).max(1);
     Rect::new(
-        margin_x,
-        margin_y,
-        (frame.cols() - 2 * margin_x).max(1),
-        (frame.rows() - 2 * margin_y).max(1),
+        (frame.cols() - width) / 2,
+        (frame.rows() - height) / 2,
+        width,
+        height,
     )
 }
 
@@ -302,9 +304,8 @@ pub fn analyze_enchant_window(
     analyze_enchant_window_inner(frame, cfg, false)
 }
 
-/// Result-screen mode searches the central part of the captured game window.
-/// It is used after Start was clicked, when the game displays its result popup
-/// in the middle of the screen.
+/// Result-screen mode searches a 200x200 area around the center of the captured
+/// game window and compares it against the user's exact OK-button reference.
 pub fn analyze_enchant_result(
     frame: &Mat,
     cfg: &EnchantDetectorConfig,
@@ -391,35 +392,16 @@ fn analyze_enchant_window_inner(
         } else {
             center_rect
         };
-        let search = Mat::roi(frame, search_rect)?.try_clone()?;
-        let source = grayscale(&search)?;
-        let success = grayscale(&decode_image(SUCCESS_TEMPLATE)?)?;
-        let failure = grayscale(&decode_image(FAILURE_TEMPLATE)?)?;
-
-        let mut best = match_template(
-            &source,
-            &success,
-            cfg,
-            cfg.confidence_threshold,
-        )?;
-        let failure_match = match_template(
-            &source,
-            &failure,
-            cfg,
-            cfg.confidence_threshold,
-        )?;
-        if failure_match.score > best.score {
-            best = failure_match;
-        }
+        // Use the uploaded button image itself, in color, rather than the older
+        // generic success/failure captures. A high threshold requires a close match.
+        let source = Mat::roi(frame, search_rect)?.try_clone()?;
+        let template = decode_image(RESULT_OK_TEMPLATE)?;
+        let mut best = match_template(&source, &template, cfg, RESULT_OK_THRESHOLD)?;
         if let Some(rect) = &mut best.rect {
             rect.x += search_rect.x;
             rect.y += search_rect.y;
         }
-
-        // The result popup can be separate from, or replace, the enchant dialog.
-        if best.score > ok_button.score {
-            ok_button = best;
-        }
+        ok_button = best;
     }
 
     Ok(EnchantAnalysis {
@@ -454,23 +436,19 @@ mod tests {
     }
 
     #[test]
-    fn result_ok_is_found_in_center_outside_enchant_dialog() {
+    fn uploaded_ok_button_is_found_in_the_center_200px_region() {
         let mut frame = Mat::new_rows_cols_with_default(
-            340,
-            500,
+            480,
+            640,
             core::CV_8UC3,
             Scalar::new(28.0, 35.0, 42.0, 0.0),
         )
         .unwrap();
 
-        let header = decode_image(ENCHANT_HEADER_TEMPLATE).unwrap();
-        let mut header_roi = Mat::roi_mut(&mut frame, Rect::new(25, 7, 299, 23)).unwrap();
-        header.copy_to(&mut header_roi).unwrap();
-
-        let ok = decode_image(SUCCESS_TEMPLATE).unwrap();
+        let ok = decode_image(RESULT_OK_TEMPLATE).unwrap();
         let expected_rect = Rect::new(
-            (frame.cols() - ok.cols()) / 2,
-            (frame.rows() - ok.rows()) / 2,
+            (frame.cols() - ok.cols()) / 2 + 24,
+            (frame.rows() - ok.rows()) / 2 - 18,
             ok.cols(),
             ok.rows(),
         );
@@ -485,7 +463,10 @@ mod tests {
             ..Default::default()
         };
         let result = analyze_enchant_result(&frame, &cfg).unwrap();
-        assert!(result.dialog_window.is_some());
+        assert_eq!(
+            centered_result_region(&frame),
+            Rect::new(220, 140, 200, 200)
+        );
         assert!(result.ok_button.found, "score={}", result.ok_button.score);
         assert_eq!(
             result.ok_button.rect,
@@ -494,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn result_ok_outside_center_region_is_ignored() {
+    fn uploaded_ok_button_outside_center_region_is_ignored() {
         let mut frame = Mat::new_rows_cols_with_default(
             260,
             420,
@@ -502,7 +483,7 @@ mod tests {
             Scalar::new(28.0, 35.0, 42.0, 0.0),
         )
         .unwrap();
-        let ok = decode_image(SUCCESS_TEMPLATE).unwrap();
+        let ok = decode_image(RESULT_OK_TEMPLATE).unwrap();
         let mut roi = Mat::roi_mut(&mut frame, Rect::new(8, 8, ok.cols(), ok.rows())).unwrap();
         ok.copy_to(&mut roi).unwrap();
 
@@ -526,7 +507,7 @@ mod tests {
             Scalar::new(28.0, 35.0, 42.0, 0.0),
         )
         .unwrap();
-        let ok = decode_image(FAILURE_TEMPLATE).unwrap();
+        let ok = decode_image(RESULT_OK_TEMPLATE).unwrap();
         let mut roi = Mat::roi_mut(&mut frame, Rect::new(240, 160, ok.cols(), ok.rows())).unwrap();
         ok.copy_to(&mut roi).unwrap();
 
