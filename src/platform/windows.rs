@@ -14,8 +14,8 @@ use windows_sys::Win32::{
     System::Threading::GetCurrentProcessId,
     UI::{
         Input::KeyboardAndMouse::{
-            GetAsyncKeyState, mouse_event, MOUSEEVENTF_LEFTDOWN,
-            MOUSEEVENTF_LEFTUP, VK_F12,
+            GetAsyncKeyState, mouse_event, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+            MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, VK_F12,
         },
         WindowsAndMessaging::{
             EnumWindows, GetForegroundWindow, GetWindowRect, GetWindowTextLengthW,
@@ -221,20 +221,33 @@ pub fn f12_pressed() -> bool {
     unsafe { GetAsyncKeyState(VK_F12 as i32) < 0 }
 }
 
-/// Brings the selected game window forward and emits one physical-style left click.
-/// Coordinates are relative to the captured top-level window rectangle.
+/// Sends a left click to a point relative to the selected top-level window.
 pub fn click_window_point(handle: isize, x: i32, y: i32) -> Result<(), String> {
+    click_window_point_with_flags(handle, x, y, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
+}
+
+/// Sends a right click to a point relative to the selected top-level window.
+pub fn right_click_window_point(handle: isize, x: i32, y: i32) -> Result<(), String> {
+    click_window_point_with_flags(handle, x, y, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP)
+}
+
+fn click_window_point_with_flags(
+    handle: isize,
+    x: i32,
+    y: i32,
+    down_flag: u32,
+    up_flag: u32,
+) -> Result<(), String> {
     let hwnd = handle as HWND;
     if unsafe { IsWindow(hwnd) } == 0 {
         return Err("Выбранное игровое окно закрыто".into());
     }
-
     if unsafe { IsIconic(hwnd) } != 0 {
-        unsafe { ShowWindow(hwnd, SW_RESTORE); }
+        return Err("Игровое окно свёрнуто. Разверните его перед запуском автоматизации.".into());
     }
+
     unsafe { SetForegroundWindow(hwnd); }
     thread::sleep(Duration::from_millis(120));
-
     if unsafe { GetForegroundWindow() } != hwnd {
         return Err(
             "Windows не передала фокус игровому окну. Переключитесь в игру вручную и повторите запуск."
@@ -264,8 +277,8 @@ pub fn click_window_point(handle: isize, x: i32, y: i32) -> Result<(), String> {
         return Err("Аварийная остановка F12 перед кликом".into());
     }
 
-    unsafe { mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0); }
+    unsafe { mouse_event(down_flag, 0, 0, 0, 0); }
     thread::sleep(Duration::from_millis(55));
-    unsafe { mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0); }
+    unsafe { mouse_event(up_flag, 0, 0, 0, 0); }
     Ok(())
 }
