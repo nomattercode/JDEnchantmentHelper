@@ -1,5 +1,4 @@
-[env]
-# Keep OpenCV/vcpkg discovery consistent for cargo build, cargo check,
-# cargo test, and IDE-triggered Cargo builds.
-VCPKGRS_TRIPLET = { value = "x64-windows", force = true }
-VCPKGRS_DYNAMIC = { value = "1", force = true }
+# Produce a self-contained MSVC executable.
+# This must match vcpkg's x64-windows-static triplet (/MT).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

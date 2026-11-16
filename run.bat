@@ -2,18 +2,18 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-if not defined VCPKG_ROOT if defined VCPKG_INSTALLATION_ROOT set "VCPKG_ROOT=%VCPKG_INSTALLATION_ROOT%"
-if not defined VCPKG_ROOT if exist "C:\vcpkg\installed\x64-windows\bin\opencv_core4.dll" set "VCPKG_ROOT=C:\vcpkg"
+rem Prefer the self-contained executable beside this launcher (portable package).
+set "APP=%~dp0jd-enchantment-helper.exe"
 
-if defined VCPKG_ROOT (
-    set "PATH=%VCPKG_ROOT%\installed\x64-windows\bin;%PATH%"
-)
+rem When run from the source repository, use the Release build.
+if not exist "%APP%" if exist "%~dp0target\release\jd-enchantment-helper.exe" set "APP=%~dp0target\release\jd-enchantment-helper.exe"
 
-if not exist "target\release\jd-enchantment-helper.exe" (
-    echo [ERROR] Release executable not found.
-    echo Run scripts\build-test.bat first.
+if not exist "%APP%" (
+    echo [ERROR] Application executable was not found.
+    echo For a source checkout, run scripts\build-test.bat first.
+    echo For another PC, copy the complete JD-Enchantment-Helper-Portable folder.
     pause
     exit /b 1
 )
 
-start "" "target\release\jd-enchantment-helper.exe"
+start "" "%APP%"

@@ -42,26 +42,35 @@ The OK detector uses the supplied success/failure templates (82×42 px) and a de
 - A window/capture/input error, missing amulet, missing next item, or Start/OK timeout stops the sequence.
 - Start with one pass and watch the full first cycle. Increase the pass count only after confirming that the selected inventory cells, Start button and OK button are all marked correctly.
 
-## Build on Windows 10
+## Self-contained Windows build
 
-Prerequisites:
+The project uses static OpenCV libraries and a static MSVC runtime for distribution. The target PC does not need OpenCV DLLs, vcpkg, Rust, LLVM, Visual Studio Build Tools, or a separate VC++ Redistributable installation.
 
-1. Rust stable 1.82 or newer with the MSVC toolchain: https://rustup.rs
-2. Visual Studio Build Tools (C++ workload).
+Build prerequisites on the **developer/build PC only**:
+
+1. Rust stable 1.82 or newer with the `x86_64-pc-windows-msvc` toolchain: https://rustup.rs
+2. Visual Studio Build Tools with the C++ workload.
 3. LLVM/Clang for OpenCV Rust bindings (e.g. `choco install llvm -y`).
-4. vcpkg, with OpenCV installed for `x64-windows`.
+4. vcpkg. The script installs `opencv4:x64-windows-static` automatically if it is not already installed.
 
-Run:
+Build and test:
 
 ```bat
 scripts\build-test.bat
 ```
 
-The script checks formatting, compiles all targets, runs Release tests and creates:
-`target\release\jd-enchantment-helper.exe`.
+The script checks formatting, checks all targets, runs Release tests, builds the statically linked executable, and creates:
 
-## Run
+- `dist\JD-Enchantment-Helper-Portable\jd-enchantment-helper.exe`
+- `dist\JD-Enchantment-Helper-Portable\run.bat`
+- `dist\JD-Enchantment-Helper-Portable.zip`
 
-Use `run.bat` in the repository root. It adds the vcpkg OpenCV DLL folder to PATH and starts the Release executable.
+Copy the ZIP or the complete portable folder to another 64-bit Windows 10/11 PC and run `run.bat`. No OpenCV DLL copying or PATH configuration is required.
+
+The static configuration is in `.cargo\config.toml` and uses `-C target-feature=+crt-static` with the vcpkg `x64-windows-static` triplet.
+
+## Run from the source repository
+
+Run `run.bat` in the repository root. It launches the portable executable if present beside it, otherwise it launches `target\release\jd-enchantment-helper.exe`.
 
 GitHub Actions does not run automatically on pushes or pull requests; workflow runs are manual only.
