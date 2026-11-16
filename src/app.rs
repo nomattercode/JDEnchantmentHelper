@@ -1,14 +1,14 @@
 use eframe::egui;
 use opencv::prelude::*;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     time::{Duration, Instant},
 };
 
-use crate::model::{GameWindow, RunState, MAX_RUNS};
+use crate::model::{GameWindow, RunState, MAX_PASSES};
 use crate::platform::{
     capture_window, click_window_point, f12_pressed, list_visible_windows,
-    right_click_window_point,
+    right_click_window_point, scroll_window,
 };
 use crate::vision::{
     analyze_enchant_result, analyze_enchant_window, load_image, mat_to_rgb, save_png, scan_inventory,
@@ -77,6 +77,36 @@ fn validate_inventory_scan(
     Ok(())
 }
 
+fn inventory_page_fingerprint(
+    frame: &opencv::core::Mat,
+    region: Region,
+) -> Result<u64, String> {
+    if !region.is_configured()
+        || region.x < 0
+        || region.y < 0
+        || region.x + region.width > frame.cols()
+        || region.y + region.height > frame.rows()
+    {
+        return Err("Область инвентаря выходит за границы игрового кадра.".into());
+    }
+    let roi = opencv::core::Mat::roi(
+        frame,
+        opencv::core::Rect::new(region.x, region.y, region.width, region.height),
+    )
+    .map_err(|error| format!("Не удалось прочитать область инвентаря: {error}"))?
+    .try_clone()
+    .map_err(|error| format!("Не удалось подготовить снимок страницы: {error}"))?;
+    let bytes = roi
+        .data_bytes()
+        .map_err(|error| format!("Не удалось получить пиксели страницы: {error}"))?;
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    Ok(hash)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Inventory,
@@ -91,16 +121,22 @@ enum AutomationPhase {
     WaitingForStart,
     WaitingForOk,
     ReconcileInventory,
+    CheckNextPage,
+    ReturnToFirstPage,
 }
 
 pub struct EnchantmentHelperApp {
     windows: Vec<GameWindow>,
     selected_window: Option<isize>,
-    window_previews: HashMap<isize, egui::TextureHandle>,
-    window_preview_errors: HashMap<isize, String>,
-    next_window_refresh: Instant,
-    runs: u8,
-    completed_runs: u8,
+    calibration_preview: Option<egui::TextureHandle>,
+    calibration_preview_size: egui::Vec2,
+    passes_total: u8,
+    current_pass: u8,
+    items_processed_in_pass: u32,
+    surviving_items_in_pass: u32,
+    page_index: usize,
+    current_page_fingerprint: Option<u64>,
+    return_scroll_remaining: usize,
     run_state: RunState,
     automation_phase: Option<AutomationPhase>,
     consecutive_matches: u8,
@@ -111,8 +147,9 @@ pub struct EnchantmentHelperApp {
     paused_at: Option<Instant>,
     inventory_grid_region: Region,
     logical_inventory: Vec<CellDebug>,
-    attempted_items: HashSet<(u8, u8)>,
+    processed_slots_current_page: HashSet<(u8, u8)>,
     amulet_slot: Option<CellDebug>,
+    amulet_inserted: bool,
     current_item: Option<CellDebug>,
     last_start_button: Option<Region>,
     last_enchant_window: Option<Region>,
@@ -137,11 +174,15 @@ impl Default for EnchantmentHelperApp {
         Self {
             windows: list_visible_windows(),
             selected_window: None,
-            window_previews: HashMap::new(),
-            window_preview_errors: HashMap::new(),
-            next_window_refresh: Instant::now(),
-            runs: 1,
-            completed_runs: 0,
+            calibration_preview: None,
+            calibration_preview_size: egui::Vec2::ZERO,
+            passes_total: 1,
+            current_pass: 1,
+            items_processed_in_pass: 0,
+            surviving_items_in_pass: 0,
+            page_index: 0,
+            current_page_fingerprint: None,
+            return_scroll_remaining: 0,
             run_state: RunState::Idle,
             automation_phase: None,
             consecutive_matches: 0,
@@ -152,12 +193,13 @@ impl Default for EnchantmentHelperApp {
             paused_at: None,
             inventory_grid_region: Region::default(),
             logical_inventory: Vec::new(),
-            attempted_items: HashSet::new(),
+            processed_slots_current_page: HashSet::new(),
             amulet_slot: None,
+            amulet_inserted: false,
             current_item: None,
             last_start_button: None,
             last_enchant_window: None,
-            status: "Выберите окно игры и один раз выделите область сетки инвентаря.".into(),
+            status: "Выберите игровое окно, затем снимите один кадр и выделите сетку инвентаря. По умолчанию используется первая страница.".into(),
             image_path: String::new(),
             output_dir: "diagnostics".into(),
             mode: Mode::Enchant,
@@ -167,7 +209,7 @@ impl Default for EnchantmentHelperApp {
             preview: None,
             preview_size: egui::Vec2::ZERO,
             summary: "Ожидание игрового окна.".into(),
-            logs: vec!["[app] Ready. F12 is the global emergency stop.".into()],
+            logs: vec!["Программа готова. F12 — аварийная остановка.".into()],
             select_start_region: false,
             select_inventory_region: false,
             region_drag_start: None,
