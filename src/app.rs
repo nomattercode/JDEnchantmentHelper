@@ -675,7 +675,7 @@ impl EnchantmentHelperApp {
         }
     }
 
-    fn update_automation(&mut self, ctx: &egui::Context) {
+    fn update_automation(&mut self) {
         if self.automation_phase.is_some() && f12_pressed() {
             self.stop_automation("Аварийная остановка: нажата F12.");
             return;
@@ -691,7 +691,7 @@ impl EnchantmentHelperApp {
         self.next_automation_poll = now + Duration::from_millis(260);
 
         let Some(handle) = self.selected_window else {
-            self.stop_automation("Окно игры не выбрано. Автоматизация остановлена.");
+            self.stop_automation("Игровое окно не выбрано. Автоматизация остановлена.");
             return;
         };
         let frame = match capture_window(handle) {
@@ -711,103 +711,55 @@ impl EnchantmentHelperApp {
                         return;
                     }
                 };
-                self.set_preview(ctx, &analysis.overlay);
                 if let Some(rect) = analysis.dialog_window {
-                    let detected = Region {
+                    self.last_enchant_window = Some(Region {
                         x: rect.x,
                         y: rect.y,
                         width: rect.width,
                         height: rect.height,
-                    };
-                    self.last_enchant_window = Some(detected);
-                    let path = std::path::Path::new(&self.output_dir)
-                        .join("enchant_window_last_seen.txt");
-                    let saved = (|| -> Result<(), String> {
-                        if let Some(parent) = path.parent() {
-                            std::fs::create_dir_all(parent)
-                                .map_err(|error| format!("Не удалось создать папку координат: {error}"))?;
-                        }
-                        std::fs::write(
-                            &path,
-                            format!(
-                                "window=0x{handle:X}\nx={}\ny={}\nwidth={}\nheight={}\n",
-                                detected.x, detected.y, detected.width, detected.height
-                            ),
-                        )
-                        .map_err(|error| format!("Не удалось сохранить координаты окна зачарования: {error}"))
-                    })();
-                    if let Err(error) = saved {
-                        self.log(format!("[automation] {error}"));
-                    }
-                    self.log(format!(
-                        "[automation] enchant dialog detected at ({},{},{},{})",
-                        rect.x, rect.y, rect.width, rect.height
-                    ));
+                    });
+                    self.log("Окно зачарования найдено. Выбираю амулет.");
                     self.automation_phase = Some(AutomationPhase::InsertAmulet);
                     self.reset_detection_streak();
                     self.phase_started = Instant::now();
                     self.next_automation_poll = Instant::now() + Duration::from_millis(350);
                     self.status = "Окно зачарования найдено. Выбор амулета.".into();
                 } else if now.duration_since(self.phase_started) >= Duration::from_secs(30) {
-                    self.stop_automation("Окно зачарования не найдено за 30 секунд. Клики по инвентарю не выполнялись.");
+                    self.stop_automation("Окно зачарования не найдено за 30 секунд. Игровые клики не выполнялись.");
                 } else if now.duration_since(self.last_wait_log) >= Duration::from_secs(10) {
                     self.last_wait_log = now;
-                    self.log("[automation] waiting for enchant dialog header");
+                    self.log("Ожидание окна зачарования.");
                 }
                 return;
             }
             Some(AutomationPhase::InsertAmulet) => {
+                if let Err(error) = self.scan_inventory_snapshot(&frame, false) {
+                    self.stop_automation(&format!("Не удалось подтвердить амулет: {error}"));
+                    return;
+                }
                 let Some(amulet) = self.amulet_slot.clone() else {
-                    self.stop_automation("В логической таблице не задана ячейка амулета.");
+                    self.stop_automation("Не задана ячейка амулета.");
                     return;
                 };
-                let scan = match scan_inventory(&frame, &self.inventory) {
-                    Ok(scan) => scan,
-                    Err(error) => {
-                        self.stop_automation(&format!("Не удалось перепроверить ячейку амулета: {error}"));
-                        return;
-                    }
-                };
-                if let Err(error) = validate_inventory_scan(&scan, self.inventory_grid_region, &frame) {
-                    self.stop_automation(&format!("Проверка границ инвентаря перед ПКМ: {error}"));
+                if amulet.score < self.inventory.threshold {
+                    self.stop_automation("Амулет не распознан в первой странице инвентаря.");
                     return;
                 }
-                let verified = scan
-                    .cells
-                    .iter()
-                    .find(|cell| cell.row == amulet.row && cell.col == amulet.col)
-                    .cloned();
-                let Some(verified) = verified else {
-                    self.stop_automation("Ячейка амулета отсутствует в повторном сканировании.");
-                    return;
-                };
-                if verified.score < self.inventory.threshold || verified.kind == CellKind::OutOfFrame {
-                    let message = format!(
-                        "Амулет не подтверждён перед ПКМ: r{}c{} score={:.3}, threshold={:.3}.",
-                        verified.row + 1,
-                        verified.col + 1,
-                        verified.score,
-                        self.inventory.threshold
-                    );
-                    self.stop_automation(&message);
-                    return;
-                }
-                self.amulet_slot = Some(verified.clone());
-                let x = verified.rect.x + verified.rect.width / 2;
-                let y = verified.rect.y + verified.rect.height / 2;
+                let x = amulet.rect.x + amulet.rect.width / 2;
+                let y = amulet.rect.y + amulet.rect.height / 2;
                 match right_click_window_point(handle, x, y) {
                     Ok(()) => {
+                        self.amulet_inserted = true;
                         self.log(format!(
-                            "[automation] verified and right-clicked amulet r{}c{} score={:.3} at ({x},{y})",
-                            verified.row + 1,
-                            verified.col + 1,
-                            verified.score
+                            "Амулет выбран из ячейки: строка {}, столбец {}.",
+                            amulet.row + 1,
+                            amulet.col + 1
                         ));
                         self.automation_phase = Some(AutomationPhase::InsertItem);
                         self.reset_detection_streak();
                         self.phase_started = Instant::now();
-                        self.next_automation_poll = Instant::now() + Duration::from_millis(420);
-                        self.status = "Амулет перепроверен и выбран. Перенос предмета в окно зачарования.".into();
+                        self.next_automation_poll = Instant::now() + Duration::from_millis(450);
+                        self.status = "Амулет помещён в окно зачарования. Начинаю перебор предметов.".into();
                     }
                     Err(error) => {
                         self.stop_automation(&format!("Не удалось выбрать амулет: {error}"));
@@ -816,69 +768,70 @@ impl EnchantmentHelperApp {
                 return;
             }
             Some(AutomationPhase::InsertItem) => {
-                let Some(item) = self.current_item.clone() else {
-                    self.stop_automation("Текущий предмет не задан.");
+                let Some(item) = self.current_item.clone().or_else(|| self.next_unattempted_item()) else {
+                    if let Err(error) = self.begin_scroll_down(handle) {
+                        self.stop_automation(&format!("Не удалось перейти к следующей странице: {error}"));
+                    }
                     return;
                 };
-                let scan = match scan_inventory(&frame, &self.inventory) {
-                    Ok(scan) => scan,
-                    Err(error) => {
-                        self.stop_automation(&format!("Не удалось перепроверить ячейку предмета: {error}"));
-                        return;
-                    }
-                };
-                if let Err(error) = validate_inventory_scan(&scan, self.inventory_grid_region, &frame) {
-                    self.stop_automation(&format!("Проверка границ инвентаря перед ПКМ: {error}"));
+
+                if let Err(error) = self.scan_inventory_snapshot(&frame, false) {
+                    self.stop_automation(&format!("Не удалось перепроверить выбранную ячейку: {error}"));
                     return;
                 }
-                let verified = scan
-                    .cells
+                let verified = self
+                    .logical_inventory
                     .iter()
                     .find(|cell| cell.row == item.row && cell.col == item.col)
                     .cloned();
                 let Some(verified) = verified else {
-                    self.stop_automation("Ячейка выбранного предмета отсутствует в повторном сканировании.");
+                    self.stop_automation("Выбранная ячейка отсутствует в текущей странице.");
                     return;
                 };
 
-                if verified.kind != CellKind::Occupied || verified.score < self.inventory.threshold {
-                    self.logical_inventory = scan.cells.clone();
-                    for line in &scan.log {
-                        self.log(line.clone());
-                    }
-                    self.save_debug("inventory_item_missing_before_click.png", &scan.overlay);
-                    self.set_preview(ctx, &scan.overlay);
+                if verified.kind != CellKind::Occupied
+                    || verified.score < self.inventory.threshold
+                {
+                    self.processed_slots_current_page.insert((item.row, item.col));
+                    self.items_processed_in_pass = self.items_processed_in_pass.saturating_add(1);
                     self.log(format!(
-                        "[automation] skipped r{}c{} before right-click: slot is {:?}, score={:.3}",
+                        "Ячейка {}, {} уже пуста — пропускаю.",
                         item.row + 1,
-                        item.col + 1,
-                        verified.kind,
-                        verified.score
+                        item.col + 1
                     ));
-                    self.automation_phase = Some(AutomationPhase::ReconcileInventory);
-                    self.phase_started = Instant::now();
-                    self.next_automation_poll = Instant::now() + Duration::from_millis(350);
-                    self.status = "Выбранная ячейка стала пустой до клика. Таблица обновляется; предмет будет пропущен.".into();
+                    self.current_item = self.next_unattempted_item();
+                    if self.current_item.is_some() {
+                        self.phase_started = Instant::now();
+                        self.next_automation_poll = Instant::now() + Duration::from_millis(220);
+                    } else if let Err(error) = self.begin_scroll_down(handle) {
+                        self.stop_automation(&format!("Не удалось перейти к следующей странице: {error}"));
+                    }
                     return;
                 }
 
-                self.logical_inventory = scan.cells.clone();
                 self.current_item = Some(verified.clone());
                 let x = verified.rect.x + verified.rect.width / 2;
                 let y = verified.rect.y + verified.rect.height / 2;
                 match right_click_window_point(handle, x, y) {
                     Ok(()) => {
                         self.log(format!(
-                            "[automation] verified and right-clicked item r{}c{} score={:.3} at ({x},{y})",
+                            "Выбран предмет: страница {}, строка {}, столбец {}.",
+                            self.page_index + 1,
                             verified.row + 1,
-                            verified.col + 1,
-                            verified.score
+                            verified.col + 1
                         ));
                         self.automation_phase = Some(AutomationPhase::WaitingForStart);
                         self.reset_detection_streak();
                         self.phase_started = Instant::now();
                         self.next_automation_poll = Instant::now() + Duration::from_millis(420);
-                        self.status = "Предмет перепроверен и выбран. Ожидание появления и активации кнопки «Начать».".into();
+                        self.status = format!(
+                            "Проход {} из {} · страница {} · предмет {}, {}. Ожидание кнопки «Начать».",
+                            self.current_pass,
+                            self.passes_total,
+                            self.page_index + 1,
+                            verified.row + 1,
+                            verified.col + 1
+                        );
                     }
                     Err(error) => {
                         self.stop_automation(&format!("Не удалось выбрать предмет: {error}"));
@@ -888,74 +841,124 @@ impl EnchantmentHelperApp {
             }
             Some(AutomationPhase::ReconcileInventory) => {
                 let current_item = self.current_item.clone();
-                if let Err(error) = self.scan_inventory_snapshot(ctx, &frame, false) {
+                if let Err(error) = self.scan_inventory_snapshot(&frame, false) {
                     self.stop_automation(&format!(
-                        "Не удалось обновить таблицу инвентаря после OK: {error}"
+                        "Не удалось обновить страницу инвентаря после зачарования: {error}"
                     ));
                     return;
                 }
 
                 if let Some(previous) = current_item {
-                    let updated_kind = self
+                    self.processed_slots_current_page
+                        .insert((previous.row, previous.col));
+                    self.items_processed_in_pass = self.items_processed_in_pass.saturating_add(1);
+
+                    let updated = self
                         .logical_inventory
                         .iter()
-                        .find(|cell| cell.row == previous.row && cell.col == previous.col)
-                        .map(|cell| cell.kind);
-                    match updated_kind {
+                        .find(|cell| cell.row == previous.row && cell.col == previous.col);
+                    match updated.map(|cell| cell.kind) {
+                        Some(CellKind::Occupied) => {
+                            self.surviving_items_in_pass =
+                                self.surviving_items_in_pass.saturating_add(1);
+                            self.log(format!(
+                                "Предмет в ячейке {}, {} уцелел. Он будет доступен в следующем проходе.",
+                                previous.row + 1,
+                                previous.col + 1
+                            ));
+                        }
                         Some(CellKind::Empty) => {
                             self.log(format!(
-                                "[automation] current item r{}c{} is now empty (possibly destroyed); removed from the available queue",
+                                "Предмет в ячейке {}, {} исчез. Ячейка исключена из следующих проходов.",
                                 previous.row + 1,
                                 previous.col + 1
                             ));
                         }
-                        Some(CellKind::Occupied) => {
+                        _ => {
                             self.log(format!(
-                                "[automation] current item r{}c{} remains in inventory; it is marked attempted and will not be clicked again",
+                                "Состояние ячейки {}, {} после зачарования не подтверждено.",
                                 previous.row + 1,
                                 previous.col + 1
                             ));
                         }
-                        _ => {}
                     }
                 }
 
-                if self.completed_runs >= self.runs {
-                    self.automation_phase = None;
-                    self.current_item = None;
-                    self.run_state = RunState::Stopped;
+                self.current_item = self.next_unattempted_item();
+                if let Some(item) = self.current_item.clone() {
+                    self.automation_phase = Some(AutomationPhase::InsertItem);
+                    self.phase_started = Instant::now();
+                    self.next_automation_poll = Instant::now() + Duration::from_millis(300);
                     self.status = format!(
-                        "Серия завершена: выполнено {} из {} прогонов. Инвентарь повторно просканирован.",
-                        self.completed_runs, self.runs
+                        "Проход {} из {} · страница {} · следующий предмет: {}, {}.",
+                        self.current_pass,
+                        self.passes_total,
+                        self.page_index + 1,
+                        item.row + 1,
+                        item.col + 1
                     );
-                    self.log("[automation] requested run count reached after inventory reconciliation");
+                } else if let Err(error) = self.begin_scroll_down(handle) {
+                    self.stop_automation(&format!("Не удалось перейти к следующей странице: {error}"));
+                }
+                return;
+            }
+            Some(AutomationPhase::CheckNextPage) => {
+                let fingerprint = match inventory_page_fingerprint(&frame, self.inventory_grid_region) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.stop_automation(&format!("Не удалось проверить смену страницы инвентаря: {error}"));
+                        return;
+                    }
+                };
+
+                if self.current_page_fingerprint == Some(fingerprint) {
+                    self.log(format!(
+                        "Новых страниц после страницы {} не обнаружено.",
+                        self.page_index + 1
+                    ));
+                    self.finish_pass_at_bottom(handle, &frame);
                     return;
                 }
 
-                let Some(next_item) = self.next_unattempted_item() else {
-                    self.automation_phase = None;
-                    self.current_item = None;
-                    self.run_state = RunState::Stopped;
-                    self.status = format!(
-                        "Остановлено: доступные предметы закончились. Выполнено {} из {} прогонов.",
-                        self.completed_runs, self.runs
-                    );
-                    self.log("[automation] no unattempted occupied inventory slots remain");
+                self.page_index = self.page_index.saturating_add(1);
+                self.processed_slots_current_page.clear();
+                self.current_item = None;
+                if let Err(error) = self.scan_inventory_snapshot(&frame, false) {
+                    self.stop_automation(&format!("Не удалось просканировать страницу {}: {error}", self.page_index + 1));
                     return;
-                };
+                }
 
-                self.current_item = Some(next_item.clone());
-                self.automation_phase = Some(AutomationPhase::DetectEnchantDialog);
-                self.phase_started = Instant::now();
-                self.next_automation_poll = Instant::now() + Duration::from_millis(450);
-                self.reset_detection_streak();
-                self.status = format!(
-                    "Таблица обновлена. Следующий предмет: r{}c{} (прогон {} из {}).",
-                    next_item.row + 1,
-                    next_item.col + 1,
-                    self.completed_runs + 1,
-                    self.runs
-                );
+                self.log(format!("Открыта страница {}.", self.page_index + 1));
+                if let Some(item) = self.next_unattempted_item() {
+                    self.current_item = Some(item);
+                    self.automation_phase = Some(AutomationPhase::InsertItem);
+                    self.phase_started = Instant::now();
+                    self.next_automation_poll = Instant::now() + Duration::from_millis(280);
+                } else if let Err(error) = self.begin_scroll_down(handle) {
+                    self.stop_automation(&format!("Не удалось перейти к следующей странице: {error}"));
+                }
+                return;
+            }
+            Some(AutomationPhase::ReturnToFirstPage) => {
+                if self.return_scroll_remaining > 0 {
+                    let x = self.inventory_grid_region.x + self.inventory_grid_region.width / 2;
+                    let y = self.inventory_grid_region.y + self.inventory_grid_region.height / 2;
+                    if let Err(error) = scroll_window(handle, x, y, 120) {
+                        self.stop_automation(&format!("Не удалось прокрутить инвентарь к первой странице: {error}"));
+                        return;
+                    }
+                    self.return_scroll_remaining = self.return_scroll_remaining.saturating_sub(1);
+                    self.page_index = self.page_index.saturating_sub(1);
+                    self.next_automation_poll = Instant::now() + Duration::from_millis(650);
+                    self.status = format!(
+                        "Возврат к первой странице. Осталось прокруток вверх: {}.",
+                        self.return_scroll_remaining
+                    );
+                    return;
+                }
+
+                // The last upward wheel event has settled; this frame is page one.
+                self.start_next_pass(handle, &frame);
                 return;
             }
             Some(AutomationPhase::WaitingForStart)
@@ -968,20 +971,25 @@ impl EnchantmentHelperApp {
             Some(AutomationPhase::DetectEnchantDialog) => Duration::from_secs(30),
             Some(AutomationPhase::WaitingForStart) => Duration::from_secs(45),
             Some(AutomationPhase::WaitingForOk) => Duration::from_secs(180),
+            Some(AutomationPhase::CheckNextPage) => Duration::from_secs(8),
+            Some(AutomationPhase::ReturnToFirstPage) => Duration::from_secs(8),
             _ => Duration::from_secs(30),
         };
         if now.duration_since(self.phase_started) > timeout {
             let message = match phase {
-                Some(AutomationPhase::DetectEnchantDialog) => {
-                    "Тайм-аут: окно зачарования не обнаружено."
-                }
                 Some(AutomationPhase::WaitingForStart) => {
-                    "Тайм-аут: кнопка «Начать» не появилась или осталась неактивной."
+                    "Не дождался активации кнопки «Начать»."
                 }
                 Some(AutomationPhase::WaitingForOk) => {
-                    "Тайм-аут: окно не показало распознаваемую кнопку OK."
+                    "Не дождался кнопки OK после зачарования."
                 }
-                _ => "Тайм-аут этапа автоматизации.",
+                Some(AutomationPhase::CheckNextPage) => {
+                    "Не удалось определить результат прокрутки инвентаря."
+                }
+                Some(AutomationPhase::ReturnToFirstPage) => {
+                    "Не удалось вернуться к первой странице инвентаря."
+                }
+                _ => "Истекло время ожидания этапа автоматизации.",
             };
             self.stop_automation(message);
             return;
@@ -995,105 +1003,29 @@ impl EnchantmentHelperApp {
         let analysis = match analysis_result {
             Ok(analysis) => analysis,
             Err(error) => {
-                self.stop_automation(&format!("Ошибка анализа OpenCV: {error}"));
+                self.stop_automation(&format!("Ошибка распознавания окна зачарования: {error}"));
                 return;
             }
         };
-        self.set_preview(ctx, &analysis.overlay);
 
         if let Some(dialog) = analysis.dialog_window {
-            let detected_dialog = Region {
+            self.last_enchant_window = Some(Region {
                 x: dialog.x,
                 y: dialog.y,
                 width: dialog.width,
                 height: dialog.height,
-            };
-            if self.last_enchant_window != Some(detected_dialog) {
-                self.last_enchant_window = Some(detected_dialog);
-                let path = std::path::Path::new(&self.output_dir)
-                    .join("enchant_window_last_seen.txt");
-                let saved = (|| -> Result<(), String> {
-                    if let Some(parent) = path.parent() {
-                        std::fs::create_dir_all(parent)
-                            .map_err(|error| format!("Не удалось создать папку координат: {error}"))?;
-                    }
-                    std::fs::write(
-                        &path,
-                        format!(
-                            "window=0x{handle:X}\nx={}\ny={}\nwidth={}\nheight={}\n",
-                            detected_dialog.x, detected_dialog.y,
-                            detected_dialog.width, detected_dialog.height
-                        ),
-                    )
-                    .map_err(|error| format!("Не удалось сохранить координаты окна зачарования: {error}"))
-                })();
-                match saved {
-                    Ok(()) => self.log(format!(
-                        "[automation] saved enchant-window coordinates to {}",
-                        path.display()
-                    )),
-                    Err(error) => self.log(format!("[automation] {error}")),
-                }
-            }
+            });
         }
 
         if let Some(button) = &analysis.start_button {
-            let detected = Region {
-                x: button.rect.x,
-                y: button.rect.y,
-                width: button.rect.width,
-                height: button.rect.height,
-            };
-            if self.last_start_button != Some(detected) {
-                self.last_start_button = Some(detected);
-                let path = std::path::Path::new(&self.output_dir)
-                    .join("start_button_last_seen.txt");
-                let saved = (|| -> Result<(), String> {
-                    if let Some(parent) = path.parent() {
-                        std::fs::create_dir_all(parent)
-                            .map_err(|error| format!("Не удалось создать папку координат: {error}"))?;
-                    }
-                    std::fs::write(
-                        &path,
-                        format!(
-                            "window=0x{handle:X}\nx={}\ny={}\nwidth={}\nheight={}\n",
-                            detected.x, detected.y, detected.width, detected.height
-                        ),
-                    )
-                    .map_err(|error| format!("Не удалось сохранить координаты START: {error}"))
-                })();
-                match saved {
-                    Ok(()) => self.log(format!(
-                        "[automation] saved START coordinates to {}",
-                        path.display()
-                    )),
-                    Err(error) => self.log(format!("[automation] {error}")),
-                }
-            }
             self.summary = format!(
-                "START: {} · синий {:.0}% · OK {:.3} · предмет r{}c{} · прогон {}/{}",
-                if button.active { "активна" } else { "неактивна" },
-                button.blue_ratio * 100.0,
-                analysis.ok_button.score,
+                "Проход {}/{} · страница {} · предмет {}, {} · кнопка «Начать»: {}",
+                self.current_pass,
+                self.passes_total,
+                self.page_index + 1,
                 self.current_item.as_ref().map_or(0, |item| item.row + 1),
                 self.current_item.as_ref().map_or(0, |item| item.col + 1),
-                self.completed_runs.saturating_add(1).min(self.runs),
-                self.runs
-            );
-            if self.last_wait_log.elapsed() >= Duration::from_secs(10) {
-                self.last_wait_log = now;
-                self.log(format!(
-                    "[automation] Start template matched at ({},{},{},{}) active={} blue_ratio={:.3}",
-                    button.rect.x, button.rect.y, button.rect.width, button.rect.height,
-                    button.active, button.blue_ratio
-                ));
-            }
-        } else {
-            self.summary = format!(
-                "START не найдена · OK {:.3} · прогон {}/{}",
-                analysis.ok_button.score,
-                self.completed_runs.saturating_add(1).min(self.runs),
-                self.runs
+                if button.active { "активна" } else { "неактивна" }
             );
         }
 
@@ -1107,6 +1039,7 @@ impl EnchantmentHelperApp {
                         width: button.rect.width,
                         height: button.rect.height,
                     });
+
                 if self.update_detection_streak(current_start) {
                     if f12_pressed() {
                         self.stop_automation("Аварийная остановка: нажата F12.");
@@ -1120,26 +1053,24 @@ impl EnchantmentHelperApp {
                     let y = button.rect.y + button.rect.height / 2;
                     match click_window_point(handle, x, y) {
                         Ok(()) => {
-                            self.log(format!(
-                                "[automation] START found and clicked at ({x}, {y}) using template"
-                            ));
+                            self.log("Кнопка «Начать» подтверждена и нажата.");
                             self.automation_phase = Some(AutomationPhase::WaitingForOk);
                             self.reset_detection_streak();
                             self.phase_started = Instant::now();
                             self.next_automation_poll =
                                 Instant::now() + Duration::from_millis(550);
                             self.status = format!(
-                                "Прогон {}: зачарование запущено; ожидание кнопки OK.",
-                                self.completed_runs + 1
+                                "Проход {} из {} · страница {} · зачарование запущено. Ожидание OK.",
+                                self.current_pass, self.passes_total, self.page_index + 1
                             );
                         }
                         Err(error) => {
-                            self.stop_automation(&format!("Клик по START не выполнен: {error}"));
+                            self.stop_automation(&format!("Не удалось нажать «Начать»: {error}"));
                         }
                     }
                 } else if now.duration_since(self.last_wait_log) >= Duration::from_secs(10) {
                     self.last_wait_log = now;
-                    self.log("[automation] waiting for stable blue Start-button match");
+                    self.log("Ожидание синей кнопки «Начать».");
                 }
             }
             Some(AutomationPhase::WaitingForOk) => {
@@ -1153,6 +1084,7 @@ impl EnchantmentHelperApp {
                 } else {
                     None
                 };
+
                 if self.update_detection_streak(current_ok) {
                     if f12_pressed() {
                         self.stop_automation("Аварийная остановка: нажата F12.");
@@ -1166,28 +1098,20 @@ impl EnchantmentHelperApp {
                     let y = rect.y + rect.height / 2;
                     match click_window_point(handle, x, y) {
                         Ok(()) => {
-                            self.completed_runs = self.completed_runs.saturating_add(1);
-                            if let Some(item) = &self.current_item {
-                                self.attempted_items.insert((item.row, item.col));
-                            }
-                            self.log(format!(
-                                "[automation] clicked OK at ({x}, {y}); completed {}/{}",
-                                self.completed_runs, self.runs
-                            ));
+                            self.log("Кнопка OK подтверждена и нажата. Проверяю текущую страницу инвентаря.");
                             self.reset_detection_streak();
                             self.automation_phase = Some(AutomationPhase::ReconcileInventory);
                             self.phase_started = Instant::now();
                             self.next_automation_poll =
                                 Instant::now() + Duration::from_millis(750);
-                            self.status = "OK подтверждена. Повторное сканирование инвентаря и обновление логической таблицы.".into();
                         }
                         Err(error) => {
-                            self.stop_automation(&format!("Клик по OK не выполнен: {error}"));
+                            self.stop_automation(&format!("Не удалось нажать OK: {error}"));
                         }
                     }
                 } else if now.duration_since(self.last_wait_log) >= Duration::from_secs(10) {
                     self.last_wait_log = now;
-                    self.log("[automation] waiting for stable OK template match");
+                    self.log("Ожидание кнопки OK.");
                 }
             }
             _ => {}
