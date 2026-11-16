@@ -3,7 +3,7 @@ mod windows;
 #[cfg(windows)]
 pub use windows::{
     capture_window, click_window_point, f12_pressed, list_visible_windows,
-    right_click_window_point,
+    right_click_window_point, scroll_window,
 };
 
 #[cfg(not(windows))]
@@ -29,4 +29,14 @@ pub fn f12_pressed() -> bool {
 #[cfg(not(windows))]
 pub fn right_click_window_point(_handle: isize, _x: i32, _y: i32) -> Result<(), String> {
     Err("Игровой ввод поддерживается только в Windows".into())
+}
+
+#[cfg(not(windows))]
+pub fn scroll_window(
+    _handle: isize,
+    _x: i32,
+    _y: i32,
+    _wheel_delta: i32,
+) -> Result<(), String> {
+    Err("Прокрутка игровых окон поддерживается только в Windows.".into())
 }
