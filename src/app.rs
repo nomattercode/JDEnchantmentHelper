@@ -314,8 +314,14 @@ impl EnchantmentHelperApp {
             },
             Mode::Enchant => match analyze_enchant_window(&frame, &self.enchant) {
                 Ok(result) => {
+                    let dialog_text = result
+                        .dialog_window
+                        .as_ref()
+                        .map(|rect| format!("найдено ({},{}) {}×{}", rect.x, rect.y, rect.width, rect.height))
+                        .unwrap_or_else(|| "не найдено".into());
                     self.summary = format!(
-                        "OK: {} · score {:.3} · {} · scale {:.2} · Start: {}",
+                        "Окно зачарования: {} · OK: {} · score {:.3} · {} · scale {:.2} · Start: {}",
+                        dialog_text,
                         if result.ok_button.found { "найдена" } else { "не найдена" },
                         result.ok_button.score,
                         result.ok_button.template_name,
