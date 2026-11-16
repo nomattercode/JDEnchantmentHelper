@@ -1472,7 +1472,7 @@ impl EnchantmentHelperApp {
         }
     }
 
-    fn game_window_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn game_window_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let selection_enabled = self.automation_phase.is_none();
             let previous_window = self.selected_window;
@@ -1549,8 +1549,11 @@ impl EnchantmentHelperApp {
             }
         });
 
+    }
+
+    fn inventory_calibration_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if self.selected_window_data().is_none() {
-            ui.label("Выберите открытое окно игры.");
+            ui.label("Сначала выберите игровое окно слева.");
             return;
         }
 
@@ -1701,13 +1704,15 @@ impl eframe::App for EnchantmentHelperApp {
                         ui.group(|ui| {
                             ui.label(egui::RichText::new("1. ИГРОВОЕ ОКНО").strong());
                             ui.add_space(4.0);
-                            self.game_window_ui(ui, ctx);
+                            self.game_window_ui(ui);
                         });
 
                         ui.add_space(8.0);
                         ui.group(|ui| {
                             ui.label(egui::RichText::new("2. ИНВЕНТАРЬ").strong());
                             ui.add_space(4.0);
+                            self.inventory_calibration_ui(ui, ctx);
+                            ui.separator();
 
                             let grid_ready = self.inventory_grid_region.is_configured();
                             let selected = self.selected_window_data().is_some();
