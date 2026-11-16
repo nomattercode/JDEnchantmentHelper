@@ -75,8 +75,6 @@ pub struct EnchantAnalysis {
     pub dialog_window: Option<Rect>,
     pub ok_button: MatchResult,
     pub start_button: Option<StartButtonState>,
-    pub overlay: Mat,
-    pub log: Vec<String>,
 }
 
 fn grayscale(image: &Mat) -> opencv::Result<Mat> {
@@ -312,32 +310,11 @@ fn analyze_enchant_window_inner(
     let dialog_window = find_enchant_dialog(frame, cfg)?;
     let mut ok_button = empty_match("ok");
     let mut start_button = None;
-    let mut overlay = frame.try_clone()?;
-    let mut log = vec![format!(
-        "[enchant] frame={}x{} dialog_threshold=0.64 OK threshold={:.3} START threshold={:.3}",
-        frame.cols(),
-        frame.rows(),
-        cfg.confidence_threshold,
-        cfg.start_template_threshold
-    )];
 
-    if let Some(dialog) = dialog_window.clone() {
-        imgproc::rectangle(
-            &mut overlay,
-            dialog,
-            Scalar::new(255.0, 190.0, 0.0, 0.0),
-            2,
-            imgproc::LINE_8,
-            0,
-        )?;
-        log.push(format!(
-            "[enchant] dialog detected rect=({}, {}, {}, {})",
-            dialog.x, dialog.y, dialog.width, dialog.height
-        ));
-
+    if let Some(dialog) = dialog_window {
         let search_rect = if let Some(region) = cfg.search_region {
             let requested = clip_region(region, frame).ok_or_else(|| {
-                opencv::Error::new(core::StsBadArg, "Область поиска OK вне кадра")
+                opencv::Error::new(core::StsBadArg, "Область поиска ОК вне кадра")
             })?;
             let x1 = requested.x.max(dialog.x);
             let y1 = requested.y.max(dialog.y);
@@ -346,7 +323,7 @@ fn analyze_enchant_window_inner(
             if x2 <= x1 || y2 <= y1 {
                 return Err(opencv::Error::new(
                     core::StsBadArg,
-                    "Область поиска OK не пересекается с окном зачарования",
+                    "Область поиска ОК не пересекается с окном зачарования",
                 ));
             }
             Rect::new(x1, y1, x2 - x1, y2 - y1)
@@ -382,42 +359,13 @@ fn analyze_enchant_window_inner(
         }
         ok_button = best;
 
-        if let Some(rect) = ok_button.rect {
-            let color = if ok_button.found {
-                Scalar::new(0.0, 220.0, 0.0, 0.0)
-            } else {
-                Scalar::new(0.0, 180.0, 255.0, 0.0)
-            };
-            imgproc::rectangle(&mut overlay, rect, color, 2, imgproc::LINE_8, 0)?;
-            imgproc::put_text(
-                &mut overlay,
-                &format!("{} {:.3}", ok_button.template_name, ok_button.score),
-                Point::new(rect.x, (rect.y - 5).max(14)),
-                imgproc::FONT_HERSHEY_SIMPLEX,
-                0.45,
-                color,
-                1,
-                imgproc::LINE_AA,
-                false,
-            )?;
-        }
-        log.push(format!(
-            "[enchant] OK template={} score={:.4} threshold={:.3} found={}",
-            ok_button.template_name,
-            ok_button.score,
-            cfg.confidence_threshold,
-            ok_button.found
-        ));
-
         start_button = detect_start_button(frame, dialog, cfg)?;
-    } else {
-        log.push("[enchant] enchant dialog header not found; Start detection is disabled".into());
     }
 
     if search_ok_full_frame {
         let search_rect = if let Some(region) = cfg.search_region {
             clip_region(region, frame).ok_or_else(|| {
-                opencv::Error::new(core::StsBadArg, "Область поиска OK вне кадра")
+                opencv::Error::new(core::StsBadArg, "Область поиска ОК вне кадра")
             })?
         } else {
             Rect::new(0, 0, frame.cols(), frame.rows())
@@ -449,82 +397,16 @@ fn analyze_enchant_window_inner(
             rect.y += search_rect.y;
         }
 
-        // Prefer the strongest whole-frame match. This covers both cases:
-        // an OK button inside the enchant dialog and a separate result popup
-        // elsewhere on the game surface.
+        // The result popup can be separate from, or replace, the enchant dialog.
         if best.score > ok_button.score {
             ok_button = best;
         }
-
-        log.push(format!(
-            "[enchant] full-frame result search: template={} score={:.4} threshold={:.3} found={} rect={:?}",
-            ok_button.template_name,
-            ok_button.score,
-            cfg.confidence_threshold,
-            ok_button.found,
-            ok_button.rect
-        ));
-
-        if let Some(rect) = ok_button.rect {
-            let color = if ok_button.found {
-                Scalar::new(0.0, 220.0, 0.0, 0.0)
-            } else {
-                Scalar::new(0.0, 180.0, 255.0, 0.0)
-            };
-            imgproc::rectangle(&mut overlay, rect, color, 2, imgproc::LINE_8, 0)?;
-            imgproc::put_text(
-                &mut overlay,
-                &format!("{} {:.3}", ok_button.template_name, ok_button.score),
-                Point::new(rect.x, (rect.y - 5).max(14)),
-                imgproc::FONT_HERSHEY_SIMPLEX,
-                0.45,
-                color,
-                1,
-                imgproc::LINE_AA,
-                false,
-            )?;
-        }
-    }
-
-    if let Some(button) = &start_button {
-        let color = if button.active {
-            Scalar::new(0.0, 220.0, 0.0, 0.0)
-        } else {
-            Scalar::new(0.0, 0.0, 220.0, 0.0)
-        };
-        imgproc::rectangle(&mut overlay, button.rect, color, 2, imgproc::LINE_8, 0)?;
-        imgproc::put_text(
-            &mut overlay,
-            &format!("START blue={:.2}", button.blue_ratio),
-            Point::new(button.rect.x, (button.rect.y - 5).max(14)),
-            imgproc::FONT_HERSHEY_SIMPLEX,
-            0.45,
-            color,
-            1,
-            imgproc::LINE_AA,
-            false,
-        )?;
-        log.push(format!(
-            "[enchant] START score template threshold={:.3} blue_ratio={:.3} threshold={:.3} active={} rect=({}, {}, {}, {})",
-            cfg.start_template_threshold,
-            button.blue_ratio,
-            cfg.min_blue_ratio,
-            button.active,
-            button.rect.x,
-            button.rect.y,
-            button.rect.width,
-            button.rect.height
-        ));
-    } else if dialog_window.is_some() {
-        log.push("[enchant] Start button template not found in the enchant dialog".into());
     }
 
     Ok(EnchantAnalysis {
         dialog_window,
         ok_button,
         start_button,
-        overlay,
-        log,
     })
 }
 

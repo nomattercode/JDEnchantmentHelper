@@ -4,29 +4,6 @@ use opencv::{
     prelude::*,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DetectionMethod {
-    GrayscaleVariance,
-    EdgeDensity,
-    Saturation,
-    Combined,
-}
-
-impl DetectionMethod {
-    pub const ALL: [Self; 4] = [
-        Self::GrayscaleVariance, Self::EdgeDensity, Self::Saturation, Self::Combined,
-    ];
-
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::GrayscaleVariance => "Контраст (среднеквадратичное отклонение)",
-            Self::EdgeDensity => "Плотность границ",
-            Self::Saturation => "Насыщенность цвета",
-            Self::Combined => "Комбинированный",
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct InventoryConfig {
     pub origin_x: i32,
@@ -42,10 +19,7 @@ pub struct InventoryConfig {
     pub start_col: u8,
     pub amulet_row: u8,
     pub amulet_col: u8,
-    pub method: DetectionMethod,
     pub threshold: f64,
-    pub canny_low: f64,
-    pub canny_high: f64,
 }
 
 impl Default for InventoryConfig {
@@ -55,8 +29,7 @@ impl Default for InventoryConfig {
             origin_x: 34, origin_y: 84, columns: 6, rows: 8,
             cell_width: 36, cell_height: 36, step_x: 40, step_y: 40,
             inset: 6, start_row: 0, start_col: 1, amulet_row: 0, amulet_col: 0,
-            method: DetectionMethod::GrayscaleVariance, threshold: 0.11,
-            canny_low: 45.0, canny_high: 130.0,
+            threshold: 0.11,
         }
     }
 }
@@ -97,36 +70,26 @@ fn inside_frame(rect: Rect, frame: &Mat) -> bool {
 
 fn score_cell(frame: &Mat, rect: Rect, config: &InventoryConfig) -> opencv::Result<f64> {
     let inset = config.inset.max(0).min((rect.width.min(rect.height) - 2).max(0) / 2);
-    let roi = Rect::new(rect.x + inset, rect.y + inset, rect.width - 2 * inset, rect.height - 2 * inset);
+    let roi = Rect::new(
+        rect.x + inset,
+        rect.y + inset,
+        rect.width - 2 * inset,
+        rect.height - 2 * inset,
+    );
     let crop = Mat::roi(frame, roi)?;
     let mut gray = Mat::default();
-    imgproc::cvt_color(&crop, &mut gray, imgproc::COLOR_BGR2GRAY, 0, core::AlgorithmHint::ALGO_HINT_DEFAULT)?;
+    imgproc::cvt_color(
+        &crop,
+        &mut gray,
+        imgproc::COLOR_BGR2GRAY,
+        0,
+        core::AlgorithmHint::ALGO_HINT_DEFAULT,
+    )?;
 
     let mut mean = Scalar::default();
     let mut stddev = Scalar::default();
     core::mean_std_dev(&gray, &mut mean, &mut stddev, &core::no_array())?;
-    let variance_score = (stddev[0] / 64.0).clamp(0.0, 1.0);
-
-    let mut edges = Mat::default();
-    imgproc::canny(&gray, &mut edges, config.canny_low, config.canny_high, 3, false)?;
-    let edge_score = (
-        f64::from(core::count_non_zero(&edges)?) /
-        f64::from(roi.width * roi.height) / 0.12
-    ).clamp(0.0, 1.0);
-
-    let mut hsv = Mat::default();
-    imgproc::cvt_color(&crop, &mut hsv, imgproc::COLOR_BGR2HSV, 0, core::AlgorithmHint::ALGO_HINT_DEFAULT)?;
-    let mut channels = opencv::core::Vector::<Mat>::new();
-    core::split(&hsv, &mut channels)?;
-    let saturation = channels.get(1)?;
-    let saturation_score = core::mean(&saturation, &core::no_array())?[0] / 255.0;
-
-    Ok(match config.method {
-        DetectionMethod::GrayscaleVariance => variance_score,
-        DetectionMethod::EdgeDensity => edge_score,
-        DetectionMethod::Saturation => saturation_score,
-        DetectionMethod::Combined => 0.55 * variance_score + 0.30 * edge_score + 0.15 * saturation_score,
-    })
+    Ok((stddev[0] / 64.0).clamp(0.0, 1.0))
 }
 
 pub fn scan_inventory(frame: &Mat, config: &InventoryConfig) -> opencv::Result<InventoryScan> {

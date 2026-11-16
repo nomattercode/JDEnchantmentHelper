@@ -6,6 +6,10 @@ rust-version = "1.82"
 description = "Rust desktop tool for Jade Dynasty inventory/enchantment analysis and assisted runs"
 license = "MIT"
 
+[features]
+default = []
+require-admin = []
+
 [dependencies]
 eframe = { version = "0.29.1", default-features = false, features = ["default_fonts", "glow"] }
 opencv = { version = "0.98.2", default-features = false, features = ["clang-runtime", "imgcodecs", "imgproc"] }

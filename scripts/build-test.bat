@@ -110,9 +110,11 @@ echo [3/5] Running tests in Release configuration...
 cargo test --release --all-targets
 if errorlevel 1 exit /b 1
 
+echo [INFO] Tests run without administrator manifest; final app will request UAC.
+
 echo.
-echo [4/5] Building statically linked Release executable...
-cargo build --release
+echo [4/5] Building statically linked Release executable with administrator manifest...
+cargo build --release --features require-admin
 if errorlevel 1 exit /b 1
 
 if not exist "target\release\jd-enchantment-helper.exe" (
