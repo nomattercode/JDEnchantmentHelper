@@ -59,14 +59,12 @@ pub struct MatchResult {
     pub found: bool,
     pub score: f64,
     pub rect: Option<Rect>,
-    pub template_name: String,
     pub scale: f64,
 }
 
 #[derive(Clone, Debug)]
 pub struct StartButtonState {
     pub active: bool,
-    pub blue_ratio: f64,
     pub rect: Rect,
 }
 
@@ -92,7 +90,6 @@ fn grayscale(image: &Mat) -> opencv::Result<Mat> {
 fn match_template(
     source: &Mat,
     template: &Mat,
-    name: &str,
     cfg: &EnchantDetectorConfig,
     threshold: f64,
 ) -> opencv::Result<MatchResult> {
@@ -147,7 +144,6 @@ fn match_template(
         found: best_score >= threshold,
         score: best_score.max(0.0),
         rect: best_rect,
-        template_name: name.into(),
         scale: best_scale,
     })
 }
@@ -192,7 +188,7 @@ fn find_enchant_dialog(
 ) -> opencv::Result<Option<Rect>> {
     let source = grayscale(frame)?;
     let header = grayscale(&decode_image(ENCHANT_HEADER_TEMPLATE)?)?;
-    let matched = match_template(&source, &header, "enchant_header", cfg, 0.64)?;
+    let matched = match_template(&source, &header, cfg, 0.64)?;
     if !matched.found {
         return Ok(None);
     }
@@ -213,12 +209,11 @@ fn find_enchant_dialog(
     Ok(clip_region(dialog, frame))
 }
 
-fn empty_match(name: &str) -> MatchResult {
+fn empty_match() -> MatchResult {
     MatchResult {
         found: false,
         score: 0.0,
         rect: None,
-        template_name: name.into(),
         scale: 1.0,
     }
 }
@@ -251,7 +246,6 @@ fn detect_start_button(
         let matched = match_template(
             &source,
             &template,
-            "start_button",
             cfg,
             cfg.start_template_threshold,
         )?;
@@ -276,7 +270,6 @@ fn detect_start_button(
 
     Ok(Some(StartButtonState {
         active: ratio >= cfg.min_blue_ratio,
-        blue_ratio: ratio,
         rect,
     }))
 }
@@ -308,7 +301,7 @@ fn analyze_enchant_window_inner(
     }
 
     let dialog_window = find_enchant_dialog(frame, cfg)?;
-    let mut ok_button = empty_match("ok");
+    let mut ok_button = empty_match();
     let mut start_button = None;
 
     if let Some(dialog) = dialog_window {
@@ -339,14 +332,12 @@ fn analyze_enchant_window_inner(
         let mut best = match_template(
             &source,
             &success,
-            "ok_success",
             cfg,
             cfg.confidence_threshold,
         )?;
         let failure_match = match_template(
             &source,
             &failure,
-            "ok_failure",
             cfg,
             cfg.confidence_threshold,
         )?;
@@ -378,14 +369,12 @@ fn analyze_enchant_window_inner(
         let mut best = match_template(
             &source,
             &success,
-            "ok_success",
             cfg,
             cfg.confidence_threshold,
         )?;
         let failure_match = match_template(
             &source,
             &failure,
-            "ok_failure",
             cfg,
             cfg.confidence_threshold,
         )?;
@@ -507,7 +496,7 @@ mod tests {
             scale_step: 0.05,
             ..Default::default()
         };
-        let result = match_template(&frame, &frame, "ok_success", &cfg, 0.95).unwrap();
+        let result = match_template(&frame, &frame, &cfg, 0.95).unwrap();
         assert!(result.found, "score={}", result.score);
         assert!(result.score > 0.99);
     }
@@ -522,7 +511,7 @@ mod tests {
             scale_step: 0.05,
             ..Default::default()
         };
-        let result = match_template(&frame, &frame, "ok_failure", &cfg, 0.95).unwrap();
+        let result = match_template(&frame, &frame, &cfg, 0.95).unwrap();
         assert!(result.found, "score={}", result.score);
         assert!(result.score > 0.99);
     }
@@ -539,8 +528,7 @@ mod tests {
         let result = analyze_enchant_window(&frame, &cfg).unwrap();
         assert_eq!(result.dialog_window, Some(Rect::new(22, 7, 302, 200)));
         let start = result.start_button.expect("Start template should be detected");
-        assert!(start.active, "blue_ratio={}", start.blue_ratio);
-        assert!(start.blue_ratio >= cfg.min_blue_ratio);
+        assert!(start.active);
         assert_eq!((start.rect.x, start.rect.y), (53, 158));
     }
 
@@ -569,7 +557,6 @@ mod tests {
         let result = analyze_enchant_window(&frame, &cfg).unwrap();
         let start = result.start_button.expect("Gray Start outline should match");
         assert!(!start.active);
-        assert!(start.blue_ratio < cfg.min_blue_ratio);
     }
 
     #[test]
@@ -588,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_start_roi_reports_blue_ratio() {
+    fn configured_start_roi_detects_active_button() {
         let frame = reference_sized_frame();
         let cfg = EnchantDetectorConfig {
             start_button_region: Region {
@@ -605,6 +592,5 @@ mod tests {
         let result = analyze_enchant_window(&frame, &cfg).unwrap();
         let button = result.start_button.unwrap();
         assert!(button.active);
-        assert!(button.blue_ratio > 0.90);
     }
 }

@@ -7,17 +7,6 @@ pub enum RunState {
     Stopped,
 }
 
-impl RunState {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Idle => "Ожидание",
-            Self::Running => "Запущена",
-            Self::Paused => "Пауза",
-            Self::Stopped => "Остановлена",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GameWindow {
     /// Native window handle, stored as an integer so the UI model is
@@ -38,13 +27,5 @@ mod tests {
     #[test]
     fn pass_limit_is_ten() {
         assert_eq!(MAX_PASSES, 10);
-    }
-
-    #[test]
-    fn states_have_user_facing_labels() {
-        assert_eq!(RunState::Idle.label(), "Ожидание");
-        assert_eq!(RunState::Running.label(), "Запущена");
-        assert_eq!(RunState::Paused.label(), "Пауза");
-        assert_eq!(RunState::Stopped.label(), "Остановлена");
     }
 }

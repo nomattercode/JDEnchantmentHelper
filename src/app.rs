@@ -150,7 +150,11 @@ fn should_start_another_pass(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AutomationPhase {
     DetectEnchantDialog,
+    ReturnToAmuletPage,
+    CheckAmuletPage,
     InsertAmulet,
+    ReturnToItemPage,
+    CheckItemPage,
     InsertItem,
     WaitingForStart,
     WaitingForOk,
@@ -181,6 +185,7 @@ pub struct EnchantmentHelperApp {
     pending_page_fingerprint: Option<u64>,
     stable_page_change_checks: u8,
     return_scroll_remaining: usize,
+    target_item_page: usize,
 
     run_state: RunState,
     automation_phase: Option<AutomationPhase>,
@@ -225,6 +230,7 @@ impl Default for EnchantmentHelperApp {
             pending_page_fingerprint: None,
             stable_page_change_checks: 0,
             return_scroll_remaining: 0,
+            target_item_page: 0,
 
             run_state: RunState::Idle,
             automation_phase: None,
@@ -431,6 +437,18 @@ impl EnchantmentHelperApp {
             .cloned()
     }
 
+    fn prepare_amulet_for_current_item(&mut self) {
+        self.target_item_page = self.page_index;
+        self.amulet_inserted = false;
+        self.automation_phase = Some(AutomationPhase::ReturnToAmuletPage);
+        self.phase_started = Instant::now();
+        self.next_automation_poll = Instant::now();
+        self.log(format!(
+            "Перед зачарованием предмета со страницы {} повторно выбираю амулет.",
+            self.target_item_page + 1
+        ));
+    }
+
     fn begin_scroll_down(&mut self, handle: isize) -> Result<(), String> {
         let x = self.inventory_grid_region.x + self.inventory_grid_region.width / 2;
         let y = self.inventory_grid_region.y + self.inventory_grid_region.height / 2;
@@ -458,6 +476,7 @@ impl EnchantmentHelperApp {
         self.page_index = 0;
         self.processed_slots_current_page.clear();
         self.current_item = None;
+        self.amulet_inserted = false;
         self.reset_detection_streak();
 
         if let Err(error) = self.scan_inventory_snapshot(frame, false) {
@@ -473,9 +492,7 @@ impl EnchantmentHelperApp {
         ));
         if let Some(item) = self.next_unprocessed_item() {
             self.current_item = Some(item.clone());
-            self.automation_phase = Some(AutomationPhase::InsertItem);
-            self.phase_started = Instant::now();
-            self.next_automation_poll = Instant::now() + Duration::from_millis(300);
+            self.prepare_amulet_for_current_item();
             self.status = format!(
                 "Проход {} из {}: следующий предмет — ячейка {}, {}.",
                 self.current_pass,
@@ -648,12 +665,14 @@ impl EnchantmentHelperApp {
                     }
                 };
                 if analysis.dialog_window.is_some() {
-                    self.log("Окно зачарования найдено. Выбираю амулет.");
-                    self.automation_phase = Some(AutomationPhase::InsertAmulet);
+                    self.log("Окно зачарования найдено. Подготавливаю первый предмет.");
                     self.reset_detection_streak();
-                    self.phase_started = Instant::now();
-                    self.next_automation_poll = Instant::now() + Duration::from_millis(350);
-                    self.status = "Окно зачарования найдено. Выбор амулета.".into();
+                    self.current_item = self.next_unprocessed_item();
+                    if self.current_item.is_some() {
+                        self.prepare_amulet_for_current_item();
+                    } else if let Err(error) = self.begin_scroll_down(handle) {
+                        self.stop_automation(&format!("Не удалось перейти к следующей странице: {error}"));
+                    }
                 } else if now.duration_since(self.phase_started) >= Duration::from_secs(30) {
                     self.stop_automation("Окно зачарования не найдено за 30 секунд. Клики не выполнялись.");
                 } else if now.duration_since(self.last_wait_log) >= Duration::from_secs(10) {
@@ -663,6 +682,10 @@ impl EnchantmentHelperApp {
                 return;
             }
             Some(AutomationPhase::InsertAmulet) => {
+                if self.page_index != 0 {
+                    self.stop_automation("Для выбора амулета нужно вернуться на первую страницу инвентаря.");
+                    return;
+                }
                 if let Err(error) = self.scan_inventory_snapshot(&frame, false) {
                     self.stop_automation(&format!("Не удалось подтвердить амулет: {error}"));
                     return;
@@ -681,11 +704,21 @@ impl EnchantmentHelperApp {
                             amulet.row + 1,
                             amulet.col + 1
                         ));
-                        self.automation_phase = Some(AutomationPhase::InsertItem);
+                        if self.page_index < self.target_item_page {
+                            self.automation_phase = Some(AutomationPhase::ReturnToItemPage);
+                            self.phase_started = Instant::now();
+                            self.next_automation_poll = Instant::now() + Duration::from_millis(250);
+                            self.status = format!(
+                                "Амулет выбран. Возвращаюсь на страницу {} за предметом.",
+                                self.target_item_page + 1
+                            );
+                        } else {
+                            self.automation_phase = Some(AutomationPhase::InsertItem);
+                            self.phase_started = Instant::now();
+                            self.next_automation_poll = Instant::now() + Duration::from_millis(420);
+                            self.status = "Амулет помещён в окно зачарования. Выбираю предмет.".into();
+                        }
                         self.reset_detection_streak();
-                        self.phase_started = Instant::now();
-                        self.next_automation_poll = Instant::now() + Duration::from_millis(420);
-                        self.status = "Амулет помещён в окно зачарования. Начинаю перебор предметов.".into();
                     }
                     Err(error) => self.stop_automation(&format!("Не удалось выбрать амулет: {error}")),
                 }
@@ -721,8 +754,14 @@ impl EnchantmentHelperApp {
                         item.row + 1,
                         item.col + 1
                     ));
-                    self.phase_started = Instant::now();
-                    self.next_automation_poll = Instant::now() + Duration::from_millis(200);
+                    if self.current_item.is_none() {
+                        if let Err(error) = self.begin_scroll_down(handle) {
+                            self.stop_automation(&format!("Не удалось перейти к следующей странице: {error}"));
+                        }
+                    } else {
+                        self.phase_started = Instant::now();
+                        self.next_automation_poll = Instant::now() + Duration::from_millis(200);
+                    }
                     return;
                 }
 
@@ -791,9 +830,7 @@ impl EnchantmentHelperApp {
 
                 self.current_item = self.next_unprocessed_item();
                 if let Some(item) = self.current_item.clone() {
-                    self.automation_phase = Some(AutomationPhase::InsertItem);
-                    self.phase_started = Instant::now();
-                    self.next_automation_poll = Instant::now() + Duration::from_millis(300);
+                    self.prepare_amulet_for_current_item();
                     self.status = format!(
                         "Проход {} из {} · страница {} · следующий предмет: {}, {}.",
                         self.current_pass,
@@ -865,12 +902,167 @@ impl EnchantmentHelperApp {
                 self.log(format!("Открыта страница {}.", self.page_index + 1));
                 self.current_item = self.next_unprocessed_item();
                 if self.current_item.is_some() {
-                    self.automation_phase = Some(AutomationPhase::InsertItem);
-                    self.phase_started = Instant::now();
-                    self.next_automation_poll = Instant::now() + Duration::from_millis(280);
+                    self.prepare_amulet_for_current_item();
                 } else if let Err(error) = self.begin_scroll_down(handle) {
                     self.stop_automation(&format!("Не удалось перейти к следующей странице: {error}"));
                 }
+                return;
+            }
+            Some(AutomationPhase::ReturnToAmuletPage) => {
+                if self.page_index == 0 {
+                    if let Err(error) = self.scan_inventory_snapshot(&frame, false) {
+                        self.stop_automation(&format!("Не удалось проверить амулет на первой странице: {error}"));
+                        return;
+                    }
+                    self.automation_phase = Some(AutomationPhase::InsertAmulet);
+                    self.phase_started = Instant::now();
+                    self.next_automation_poll = Instant::now() + Duration::from_millis(250);
+                    return;
+                }
+
+                let x = self.inventory_grid_region.x + self.inventory_grid_region.width / 2;
+                let y = self.inventory_grid_region.y + self.inventory_grid_region.height / 2;
+                if let Err(error) = scroll_window(handle, x, y, 120) {
+                    self.stop_automation(&format!("Не удалось перейти к амулету на первой странице: {error}"));
+                    return;
+                }
+                self.unchanged_page_checks = 0;
+                self.pending_page_fingerprint = None;
+                self.stable_page_change_checks = 0;
+                self.automation_phase = Some(AutomationPhase::CheckAmuletPage);
+                self.phase_started = Instant::now();
+                self.next_automation_poll = Instant::now() + Duration::from_millis(750);
+                self.status = format!(
+                    "Возвращаюсь к амулету. Текущая страница: {}.",
+                    self.page_index + 1
+                );
+                return;
+            }
+            Some(AutomationPhase::CheckAmuletPage) => {
+                let fingerprint = match inventory_page_fingerprint(&frame, self.inventory_grid_region) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.stop_automation(&format!("Не удалось проверить страницу при поиске амулета: {error}"));
+                        return;
+                    }
+                };
+
+                if now.duration_since(self.phase_started) > Duration::from_secs(10) {
+                    self.stop_automation("Не удалось надёжно определить переход к первой странице за амулетом.");
+                    return;
+                }
+
+                if self.current_page_fingerprint.is_some_and(|previous| same_inventory_page(previous, fingerprint)) {
+                    self.pending_page_fingerprint = None;
+                    self.stable_page_change_checks = 0;
+                    if self.unchanged_page_checks == 0 {
+                        self.unchanged_page_checks = 1;
+                        self.next_automation_poll = Instant::now() + Duration::from_millis(500);
+                        return;
+                    }
+                    self.stop_automation("Колесо мыши не переключило страницу вверх при поиске амулета.");
+                    return;
+                }
+
+                self.unchanged_page_checks = 0;
+                let stable_candidate = self
+                    .pending_page_fingerprint
+                    .is_some_and(|previous| same_inventory_page(previous, fingerprint));
+                if stable_candidate {
+                    self.stable_page_change_checks = self.stable_page_change_checks.saturating_add(1);
+                } else {
+                    self.pending_page_fingerprint = Some(fingerprint);
+                    self.stable_page_change_checks = 1;
+                }
+                if self.stable_page_change_checks < 3 {
+                    self.next_automation_poll = Instant::now() + Duration::from_millis(400);
+                    return;
+                }
+
+                self.pending_page_fingerprint = None;
+                self.stable_page_change_checks = 0;
+                self.current_page_fingerprint = Some(fingerprint);
+                self.page_index = self.page_index.saturating_sub(1);
+                self.automation_phase = Some(AutomationPhase::ReturnToAmuletPage);
+                self.phase_started = Instant::now();
+                self.next_automation_poll = Instant::now() + Duration::from_millis(250);
+                return;
+            }
+            Some(AutomationPhase::ReturnToItemPage) => {
+                if self.page_index >= self.target_item_page {
+                    self.automation_phase = Some(AutomationPhase::InsertItem);
+                    self.phase_started = Instant::now();
+                    self.next_automation_poll = Instant::now() + Duration::from_millis(300);
+                    return;
+                }
+
+                let x = self.inventory_grid_region.x + self.inventory_grid_region.width / 2;
+                let y = self.inventory_grid_region.y + self.inventory_grid_region.height / 2;
+                if let Err(error) = scroll_window(handle, x, y, -120) {
+                    self.stop_automation(&format!("Не удалось вернуться к странице предмета: {error}"));
+                    return;
+                }
+                self.unchanged_page_checks = 0;
+                self.pending_page_fingerprint = None;
+                self.stable_page_change_checks = 0;
+                self.automation_phase = Some(AutomationPhase::CheckItemPage);
+                self.phase_started = Instant::now();
+                self.next_automation_poll = Instant::now() + Duration::from_millis(750);
+                self.status = format!(
+                    "Возвращаюсь к предметам. Текущая страница: {} из {}.",
+                    self.page_index + 1,
+                    self.target_item_page + 1
+                );
+                return;
+            }
+            Some(AutomationPhase::CheckItemPage) => {
+                let fingerprint = match inventory_page_fingerprint(&frame, self.inventory_grid_region) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.stop_automation(&format!("Не удалось проверить страницу при возврате к предмету: {error}"));
+                        return;
+                    }
+                };
+
+                if now.duration_since(self.phase_started) > Duration::from_secs(10) {
+                    self.stop_automation("Не удалось надёжно определить возврат на страницу предмета.");
+                    return;
+                }
+
+                if self.current_page_fingerprint.is_some_and(|previous| same_inventory_page(previous, fingerprint)) {
+                    self.pending_page_fingerprint = None;
+                    self.stable_page_change_checks = 0;
+                    if self.unchanged_page_checks == 0 {
+                        self.unchanged_page_checks = 1;
+                        self.next_automation_poll = Instant::now() + Duration::from_millis(500);
+                        return;
+                    }
+                    self.stop_automation("Колесо мыши не переключило страницу вниз при возврате к предмету.");
+                    return;
+                }
+
+                self.unchanged_page_checks = 0;
+                let stable_candidate = self
+                    .pending_page_fingerprint
+                    .is_some_and(|previous| same_inventory_page(previous, fingerprint));
+                if stable_candidate {
+                    self.stable_page_change_checks = self.stable_page_change_checks.saturating_add(1);
+                } else {
+                    self.pending_page_fingerprint = Some(fingerprint);
+                    self.stable_page_change_checks = 1;
+                }
+                if self.stable_page_change_checks < 3 {
+                    self.next_automation_poll = Instant::now() + Duration::from_millis(400);
+                    return;
+                }
+
+                self.pending_page_fingerprint = None;
+                self.stable_page_change_checks = 0;
+                self.current_page_fingerprint = Some(fingerprint);
+                self.page_index = self.page_index.saturating_add(1);
+                self.automation_phase = Some(AutomationPhase::ReturnToItemPage);
+                self.phase_started = Instant::now();
+                self.next_automation_poll = Instant::now() + Duration::from_millis(250);
                 return;
             }
             Some(AutomationPhase::ReturnToFirstPage) => {

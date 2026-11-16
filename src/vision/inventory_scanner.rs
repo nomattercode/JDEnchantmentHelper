@@ -49,8 +49,6 @@ pub struct CellDebug {
 #[derive(Debug)]
 pub struct InventoryScan {
     pub cells: Vec<CellDebug>,
-    /// Occupied cells at/after the start point, excluding the amulet cell.
-    pub candidates: Vec<CellDebug>,
 }
 
 fn cell_rect(config: &InventoryConfig, row: u8, col: u8) -> Rect {
@@ -104,8 +102,6 @@ pub fn scan_inventory(frame: &Mat, config: &InventoryConfig) -> opencv::Result<I
     }
 
     let mut cells = Vec::with_capacity(usize::from(config.columns) * usize::from(config.rows));
-    let mut candidates = Vec::new();
-
     for row in 0..config.rows {
         for col in 0..config.columns {
             let rect = cell_rect(config, row, col);
@@ -125,12 +121,11 @@ pub fn scan_inventory(frame: &Mat, config: &InventoryConfig) -> opencv::Result<I
                 else { CellKind::Empty };
 
             let cell = CellDebug { row, col, rect, score, kind };
-            if kind == CellKind::Occupied { candidates.push(cell.clone()); }
             cells.push(cell);
         }
     }
 
-    Ok(InventoryScan { cells, candidates })
+    Ok(InventoryScan { cells })
 }
 
 #[cfg(test)]
@@ -166,6 +161,9 @@ mod tests {
         assert_eq!(scan.cells[0].kind, CellKind::Amulet);
         assert_eq!(scan.cells[1].kind, CellKind::Occupied);
         assert_eq!(scan.cells[2].kind, CellKind::Occupied);
-        assert_eq!(scan.candidates.len(), 2);
+        assert_eq!(
+            scan.cells.iter().filter(|cell| cell.kind == CellKind::Occupied).count(),
+            2
+        );
     }
 }
