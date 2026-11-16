@@ -6,10 +6,8 @@ use opencv::{
 
 use crate::vision::image_io::decode_image;
 
-const SUCCESS_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_success.png");
-const FAILURE_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_failure.png");
-const RESULT_OK_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_button_reference.png");
-const RESULT_OK_THRESHOLD: f64 = 0.94;
+const OK_BUTTON_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_button.png");
+const OK_BUTTON_THRESHOLD: f64 = 0.86;
 const START_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/start_button_active.png");
 const ENCHANT_HEADER_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/enchant_header.png");
 
@@ -172,15 +170,17 @@ fn intersect_rects(left: Rect, right: Rect) -> Option<Rect> {
     (x2 > x1 && y2 > y1).then(|| Rect::new(x1, y1, x2 - x1, y2 - y1))
 }
 
-/// Restrict result-popup detection to a 200x200 area in the game-frame center.
+/// The search area is the centered region covering 50% of the game-frame area.
+/// Keeping the frame aspect ratio makes it about 70.7% of each dimension.
 fn centered_result_region(frame: &Mat) -> Rect {
-    let width = frame.cols().min(200).max(1);
-    let height = frame.rows().min(200).max(1);
+    let scale = 0.5_f64.sqrt();
+    let width = (f64::from(frame.cols()) * scale).round() as i32;
+    let height = (f64::from(frame.rows()) * scale).round() as i32;
     Rect::new(
         (frame.cols() - width) / 2,
         (frame.rows() - height) / 2,
-        width,
-        height,
+        width.max(1),
+        height.max(1),
     )
 }
 
@@ -304,8 +304,8 @@ pub fn analyze_enchant_window(
     analyze_enchant_window_inner(frame, cfg, false)
 }
 
-/// Result-screen mode searches a 200x200 area around the center of the captured
-/// game window and compares it against the user's exact OK-button reference.
+/// Result-screen mode searches the centered half-area of the captured game
+/// window using the same OK-button template as the in-dialog detector.
 pub fn analyze_enchant_result(
     frame: &Mat,
     cfg: &EnchantDetectorConfig,
@@ -349,24 +349,13 @@ fn analyze_enchant_window_inner(
 
             let search = Mat::roi(frame, search_rect)?.try_clone()?;
             let source = grayscale(&search)?;
-            let success = grayscale(&decode_image(SUCCESS_TEMPLATE)?)?;
-            let failure = grayscale(&decode_image(FAILURE_TEMPLATE)?)?;
-
-            let mut best = match_template(
+            let template = grayscale(&decode_image(OK_BUTTON_TEMPLATE)?)?;
+            let best = match_template(
                 &source,
-                &success,
+                &template,
                 cfg,
-                cfg.confidence_threshold,
+                OK_BUTTON_THRESHOLD,
             )?;
-            let failure_match = match_template(
-                &source,
-                &failure,
-                cfg,
-                cfg.confidence_threshold,
-            )?;
-            if failure_match.score > best.score {
-                best = failure_match;
-            }
             if let Some(rect) = &mut best.rect {
                 rect.x += search_rect.x;
                 rect.y += search_rect.y;
@@ -392,11 +381,12 @@ fn analyze_enchant_window_inner(
         } else {
             center_rect
         };
-        // Use the uploaded button image itself, in color, rather than the older
-        // generic success/failure captures. A high threshold requires a close match.
-        let source = Mat::roi(frame, search_rect)?.try_clone()?;
-        let template = decode_image(RESULT_OK_TEMPLATE)?;
-        let mut best = match_template(&source, &template, cfg, RESULT_OK_THRESHOLD)?;
+        // One grayscale template covers all result variants. Grayscale matching
+        // is less sensitive to per-PC color, gamma and display differences.
+        let search = Mat::roi(frame, search_rect)?.try_clone()?;
+        let source = grayscale(&search)?;
+        let template = grayscale(&decode_image(OK_BUTTON_TEMPLATE)?)?;
+        let mut best = match_template(&source, &template, cfg, OK_BUTTON_THRESHOLD)?;
         if let Some(rect) = &mut best.rect {
             rect.x += search_rect.x;
             rect.y += search_rect.y;
@@ -436,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn uploaded_ok_button_is_found_in_the_center_200px_region() {
+    fn ok_button_is_found_in_the_center_half_area() {
         let mut frame = Mat::new_rows_cols_with_default(
             480,
             640,
@@ -463,17 +453,20 @@ mod tests {
             ..Default::default()
         };
         let result = analyze_enchant_result(&frame, &cfg).unwrap();
-        assert_eq!(
-            centered_result_region(&frame),
-            Rect::new(220, 140, 200, 200)
+        let expected_search = Rect::new(
+            93,
+            70,
+            453,
+            339,
         );
+        assert_eq!(centered_result_region(&frame), expected_search);
         assert!(result.ok_button.found, "score={}", result.ok_button.score);
         assert!(result.ok_button.score >= RESULT_OK_THRESHOLD);
         assert_eq!(result.ok_button.rect, Some(expected_rect));
     }
 
     #[test]
-    fn uploaded_ok_button_outside_center_region_is_ignored() {
+    fn ok_button_outside_center_half_area_is_ignored() {
         let mut frame = Mat::new_rows_cols_with_default(
             260,
             420,
@@ -497,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn uploaded_ok_button_is_detected_when_enchant_dialog_has_closed() {
+    fn same_ok_button_is_detected_when_enchant_dialog_has_closed() {
         let mut frame = Mat::new_rows_cols_with_default(
             480,
             640,
@@ -529,8 +522,8 @@ mod tests {
     }
 
     #[test]
-    fn success_ok_template_matches_itself() {
-        let frame = grayscale(&decode_image(SUCCESS_TEMPLATE).unwrap()).unwrap();
+    fn single_ok_button_template_matches_itself() {
+        let frame = grayscale(&decode_image(OK_BUTTON_TEMPLATE).unwrap()).unwrap();
         let cfg = EnchantDetectorConfig {
             confidence_threshold: 0.95,
             scale_min: 1.0,
@@ -538,24 +531,36 @@ mod tests {
             scale_step: 0.05,
             ..Default::default()
         };
-        let result = match_template(&frame, &frame, &cfg, 0.95).unwrap();
+        let result = match_template(&frame, &frame, &cfg, OK_BUTTON_THRESHOLD).unwrap();
         assert!(result.found, "score={}", result.score);
         assert!(result.score > 0.99);
     }
 
     #[test]
-    fn failure_ok_template_matches_itself() {
-        let frame = grayscale(&decode_image(FAILURE_TEMPLATE).unwrap()).unwrap();
+    fn single_ok_template_matches_a_scaled_button() {
+        let template = grayscale(&decode_image(OK_BUTTON_TEMPLATE).unwrap()).unwrap();
+        let mut scaled = Mat::default();
+        imgproc::resize(
+            &template,
+            &mut scaled,
+            Size::new(
+                (f64::from(template.cols()) * 1.15).round() as i32,
+                (f64::from(template.rows()) * 1.15).round() as i32,
+            ),
+            0.0,
+            0.0,
+            imgproc::INTER_LINEAR,
+        )
+        .unwrap();
+
         let cfg = EnchantDetectorConfig {
-            confidence_threshold: 0.95,
-            scale_min: 1.0,
-            scale_max: 1.0,
+            scale_min: 0.80,
+            scale_max: 1.25,
             scale_step: 0.05,
             ..Default::default()
         };
-        let result = match_template(&frame, &frame, &cfg, 0.95).unwrap();
-        assert!(result.found, "score={}", result.score);
-        assert!(result.score > 0.99);
+        let result = match_template(&scaled, &template, &cfg, OK_BUTTON_THRESHOLD).unwrap();
+        assert!(result.found, "scaled button score={}", result.score);
     }
 
     #[test]
