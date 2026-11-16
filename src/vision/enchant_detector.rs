@@ -411,7 +411,7 @@ fn analyze_enchant_window_inner(
 
         start_button = detect_start_button(frame, dialog, cfg)?;
     } else {
-        log.push("[enchant] enchant dialog header not found; Start/OK clicks are disabled".into());
+        log.push("[enchant] enchant dialog header not found; Start detection is disabled".into());
     }
 
     if search_ok_full_frame {
@@ -583,6 +583,35 @@ mod tests {
         assert_eq!(
             result.ok_button.rect,
             Some(Rect::new(350, 240, ok.cols(), ok.rows()))
+        );
+    }
+
+    #[test]
+    fn result_ok_is_detected_when_enchant_dialog_has_closed() {
+        let mut frame = Mat::new_rows_cols_with_default(
+            260,
+            420,
+            core::CV_8UC3,
+            Scalar::new(28.0, 35.0, 42.0, 0.0),
+        )
+        .unwrap();
+        let ok = decode_image(FAILURE_TEMPLATE).unwrap();
+        let mut roi = Mat::roi_mut(&mut frame, Rect::new(240, 160, ok.cols(), ok.rows())).unwrap();
+        ok.copy_to(&mut roi).unwrap();
+
+        let cfg = EnchantDetectorConfig {
+            confidence_threshold: 0.95,
+            scale_min: 1.0,
+            scale_max: 1.0,
+            scale_step: 0.05,
+            ..Default::default()
+        };
+        let result = analyze_enchant_result(&frame, &cfg).unwrap();
+        assert!(result.dialog_window.is_none());
+        assert!(result.ok_button.found, "score={}", result.ok_button.score);
+        assert_eq!(
+            result.ok_button.rect,
+            Some(Rect::new(240, 160, ok.cols(), ok.rows()))
         );
     }
 
