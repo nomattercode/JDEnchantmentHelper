@@ -7,15 +7,16 @@ Windows desktop application for scanning Jade Dynasty inventory and running a gu
 1. Select the Jade Dynasty top-level game window from the dropdown. The app refreshes its preview while it is open.
 2. On the preview, enable **Область сетки инвентаря** and drag around the complete inventory grid, from the upper-left edge of its first cell to the lower-right edge of its last cell. The default logical grid is 6 columns × 8 rows. The selection estimates cell size and spacing; inspect the overlay and adjust the geometry/threshold before automating.
 3. Check the amulet row/column and the first eligible item row/column in **Распознавание и калибровка → Инвентарь**.
-4. The Start button is located automatically using `assets/templates/start_button_active.png`, a 71×28 crop taken from the supplied 329×222 enchantment-window capture. The matcher uses the button outline and the Cyrillic label to distinguish **Начать** from the neighboring **Купить** and **Закрыть** buttons. It then checks the saturated blue pixels inside the matched button. A manual Start ROI is available only as an override.
+4. The enchantment dialog is first located from its title bar using `assets/templates/enchant_header.png`, a crop of the supplied reference capture. The last dialog rectangle is saved to `diagnostics\\enchant_window_last_seen.txt`. The Start button is then located inside that dialog using `assets/templates/start_button_active.png`, a 71×28 crop. The matcher uses the button outline and Cyrillic label to distinguish **Начать** from the neighboring **Купить** and **Закрыть** buttons, then checks saturated blue pixels inside the button. Its last rectangle is saved to `diagnostics\\start_button_last_seen.txt`. A manual Start ROI remains available as an override.
 5. Choose 1–10 passes using the left/right arrows and press **Начать зачарование**.
 
 ## Automation sequence
 
 - Scan the configured inventory grid and build the logical slot table.
 - Verify that the configured amulet cell is occupied.
+- Find the enchantment dialog title bar before sending any inventory clicks; if it is not found within 30 seconds, stop.
 - Right-click the amulet cell, then right-click the first available occupied item cell.
-- Find the Start button by template matching. Wait until the button is blue and confirm that state in two consecutive captures before left-clicking its centre.
+- Find the Start button inside the detected enchantment dialog by template matching. Wait until the button is blue and confirm that state in two consecutive captures before left-clicking its centre.
 - Wait for either supplied OK template (success or failure). Require two consecutive matches before left-clicking OK.
 - Rescan the inventory. Replace the logical table with the fresh scan and compare occupied slots. Empty slots are removed from the available queue; a still-occupied item is marked attempted and is not clicked again.
 - Repeat with the next unattempted occupied item until the selected pass count is reached or no eligible items remain.
@@ -28,7 +29,7 @@ The supplied reference image shows the enchantment dialog only; it does **not** 
 
 The scanner classifies cells from image texture/edge/saturation scores, not item identity. Keep the inventory stable while scanning; do not sort or move items during an automated series. If the inventory changes layout, stop and rescan/recalibrate before continuing.
 
-The Start matcher searches the captured game window at multiple scales. The template threshold defaults to 0.68. The blue ratio threshold defaults to 0.45; the supplied active button crop measured approximately 0.94 blue-pixel coverage with the configured HSV range. Adjust these only after checking the marked rectangle on a real game frame.
+The enchant-header matcher searches the captured game window at multiple scales and estimates the 302×200 dialog bounds from the 299×23 title-bar crop. The Start matcher searches only inside those dialog bounds. The Start template threshold defaults to 0.68. The blue ratio threshold defaults to 0.45; the supplied active button crop measured approximately 0.94 blue-pixel coverage with the configured HSV range. Adjust these only after checking the marked rectangles on a real game frame.
 
 The OK detector uses the supplied success/failure templates and a default confidence threshold of 0.84. If the result dialog is visually different from the references, stop and update the templates before using automation.
 
