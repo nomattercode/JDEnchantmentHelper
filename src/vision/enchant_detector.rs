@@ -8,6 +8,7 @@ use crate::vision::image_io::decode_image;
 
 const SUCCESS_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_success.png");
 const FAILURE_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_failure.png");
+const START_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/start_button_active.png");
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Region {
@@ -33,6 +34,7 @@ pub struct EnchantDetectorConfig {
     /// A zero-sized region means automatic detection over the full frame.
     /// Set a rectangle in the UI to restrict detection to a known button area.
     pub start_button_region: Region,
+    pub start_template_threshold: f64,
     pub min_blue_ratio: f64,
 }
 
@@ -45,7 +47,8 @@ impl Default for EnchantDetectorConfig {
             scale_step: 0.05,
             search_region: None,
             start_button_region: Region::default(),
-            min_blue_ratio: 0.22,
+            start_template_threshold: 0.68,
+            min_blue_ratio: 0.45,
         }
     }
 }
@@ -91,6 +94,7 @@ fn match_template(
     template: &Mat,
     name: &str,
     cfg: &EnchantDetectorConfig,
+    threshold: f64,
 ) -> opencv::Result<MatchResult> {
     let mut best_score = -1.0_f64;
     let mut best_rect = None;
@@ -140,7 +144,7 @@ fn match_template(
     }
 
     Ok(MatchResult {
-        found: best_score >= cfg.confidence_threshold,
+        found: best_score >= threshold,
         score: best_score.max(0.0),
         rect: best_rect,
         template_name: name.into(),
@@ -173,7 +177,9 @@ fn blue_mask(image: &Mat) -> opencv::Result<Mat> {
 
     // OpenCV hue is 0..179. This range targets saturated blue button fills,
     // while excluding neutral gray buttons and most cyan/green UI elements.
-    let lower = Scalar::new(92.0, 85.0, 65.0, 0.0);
+    // The supplied game capture has a dark but saturated blue button (V≈53),
+    // so a high value floor misses the active state. The gray button has low S.
+    let lower = Scalar::new(92.0, 85.0, 25.0, 0.0);
     let upper = Scalar::new(140.0, 255.0, 255.0, 0.0);
     let mut mask = Mat::default();
     core::in_range(&hsv, &lower, &upper, &mut mask)?;
@@ -184,70 +190,46 @@ fn detect_start_button(
     frame: &Mat,
     cfg: &EnchantDetectorConfig,
 ) -> opencv::Result<Option<StartButtonState>> {
-    let configured_region = cfg.start_button_region.is_configured();
-
-    if configured_region {
+    let rect = if cfg.start_button_region.is_configured() {
         let Some(rect) = clip_region(cfg.start_button_region, frame) else {
             return Ok(None);
         };
-        if rect.width != cfg.start_button_region.width || rect.height != cfg.start_button_region.height {
+        if rect.width != cfg.start_button_region.width
+            || rect.height != cfg.start_button_region.height
+        {
             return Ok(None);
         }
-
-        let crop = Mat::roi(frame, rect)?.try_clone()?;
-        let mask = blue_mask(&crop)?;
-        let ratio = f64::from(core::count_non_zero(&mask)?)
-            / f64::from((rect.width * rect.height).max(1));
-        return Ok(Some(StartButtonState {
-            active: ratio >= cfg.min_blue_ratio,
-            blue_ratio: ratio,
-            rect,
-        }));
-    }
-
-    // Automatic mode: locate blue, button-shaped connected regions anywhere
-    // in the captured window. The aspect/size filters reject small blue icons
-    // and long status bars. A manual ROI can be set for unusual game layouts.
-    let mask = blue_mask(frame)?;
-    let mut contours = Vector::<Vector<Point>>::new();
-    imgproc::find_contours(
-        &mask,
-        &mut contours,
-        imgproc::RETR_EXTERNAL,
-        imgproc::CHAIN_APPROX_SIMPLE,
-        Point::new(0, 0),
-    )?;
-
-    let mut best: Option<(Rect, f64, f64)> = None;
-    for index in 0..contours.len() {
-        let contour = contours.get(index)?;
-        let rect = imgproc::bounding_rect(&contour)?;
-        if rect.width < 36 || rect.height < 12 || rect.width > 700 || rect.height > 140 {
-            continue;
+        rect
+    } else {
+        // Match the Start label and the distinctive button frame from the
+        // supplied 329x222 reference capture. This distinguishes Start from
+        // the visually similar Buy and Close buttons in the same dialog.
+        let source = grayscale(frame)?;
+        let template = grayscale(&decode_image(START_TEMPLATE)?)?;
+        let matched = match_template(
+            &source,
+            &template,
+            "start_button",
+            cfg,
+            cfg.start_template_threshold,
+        )?;
+        if !matched.found {
+            return Ok(None);
         }
+        let Some(rect) = matched.rect else {
+            return Ok(None);
+        };
+        rect
+    };
 
-        let aspect = f64::from(rect.width) / f64::from(rect.height.max(1));
-        if !(1.25..=7.5).contains(&aspect) {
-            continue;
-        }
+    let crop = Mat::roi(frame, rect)?.try_clone()?;
+    let mask = blue_mask(&crop)?;
+    let ratio = f64::from(core::count_non_zero(&mask)?)
+        / f64::from((rect.width * rect.height).max(1));
 
-        let roi = Mat::roi(&mask, rect)?;
-        let blue_pixels = f64::from(core::count_non_zero(&roi)?);
-        let area = f64::from(rect.width * rect.height);
-        let ratio = blue_pixels / area.max(1.0);
-        if ratio < cfg.min_blue_ratio {
-            continue;
-        }
-
-        let score = ratio * area.sqrt();
-        if best.as_ref().is_none_or(|(_, _, best_score)| score > *best_score) {
-            best = Some((rect, ratio, score));
-        }
-    }
-
-    Ok(best.map(|(rect, blue_ratio, _)| StartButtonState {
-        active: true,
-        blue_ratio,
+    Ok(Some(StartButtonState {
+        active: ratio >= cfg.min_blue_ratio,
+        blue_ratio: ratio,
         rect,
     }))
 }
@@ -273,8 +255,8 @@ pub fn analyze_enchant_window(
     let success = grayscale(&decode_image(SUCCESS_TEMPLATE)?)?;
     let failure = grayscale(&decode_image(FAILURE_TEMPLATE)?)?;
 
-    let mut best = match_template(&source, &success, "ok_success", cfg)?;
-    let failure_match = match_template(&source, &failure, "ok_failure", cfg)?;
+    let mut best = match_template(&source, &success, "ok_success", cfg, cfg.confidence_threshold)?;
+    let failure_match = match_template(&source, &failure, "ok_failure", cfg, cfg.confidence_threshold)?;
     if failure_match.score > best.score {
         best = failure_match;
     }
@@ -407,53 +389,43 @@ mod tests {
     }
 
     #[test]
-    fn blue_start_button_is_detected_automatically() {
-        let mut frame = Mat::new_rows_cols_with_default(
-            240,
-            320,
-            core::CV_8UC3,
-            Scalar::new(70.0, 70.0, 70.0, 0.0),
-        )
-        .unwrap();
-        imgproc::rectangle(
-            &mut frame,
-            Rect::new(90, 150, 130, 32),
-            Scalar::new(220.0, 110.0, 15.0, 0.0),
-            imgproc::FILLED,
-            imgproc::LINE_8,
-            0,
-        )
-        .unwrap();
-
-        let result = detect_start_button(&frame, &EnchantDetectorConfig::default())
+    fn uploaded_start_template_is_found_and_blue_state_is_active() {
+        let frame = decode_image(START_TEMPLATE).unwrap();
+        let config = EnchantDetectorConfig {
+            scale_min: 1.0,
+            scale_max: 1.0,
+            scale_step: 0.05,
+            ..Default::default()
+        };
+        let result = detect_start_button(&frame, &config)
             .unwrap()
-            .expect("blue Start button should be found");
-        assert!(result.active);
-        assert!(result.blue_ratio >= 0.95);
-        assert!(result.rect.x >= 90 && result.rect.x <= 92);
+            .expect("Start button should match the uploaded reference");
+        assert!(result.active, "blue_ratio={}", result.blue_ratio);
+        assert!(result.blue_ratio >= config.min_blue_ratio);
+        assert_eq!((result.rect.x, result.rect.y), (0, 0));
     }
 
     #[test]
-    fn gray_start_button_is_not_triggered() {
-        let mut frame = Mat::new_rows_cols_with_default(
-            240,
-            320,
-            core::CV_8UC3,
-            Scalar::new(40.0, 40.0, 40.0, 0.0),
-        )
-        .unwrap();
-        imgproc::rectangle(
-            &mut frame,
-            Rect::new(90, 150, 130, 32),
-            Scalar::new(140.0, 140.0, 140.0, 0.0),
-            imgproc::FILLED,
-            imgproc::LINE_8,
+    fn gray_button_with_same_shape_is_detected_but_not_active() {
+        let template = grayscale(&decode_image(START_TEMPLATE).unwrap()).unwrap();
+        let mut gray_frame = Mat::default();
+        imgproc::cvt_color(
+            &template,
+            &mut gray_frame,
+            imgproc::COLOR_GRAY2BGR,
             0,
+            core::AlgorithmHint::ALGO_HINT_DEFAULT,
         )
         .unwrap();
-
-        let result = detect_start_button(&frame, &EnchantDetectorConfig::default()).unwrap();
-        assert!(result.is_none());
+        let config = EnchantDetectorConfig {
+            scale_min: 1.0,
+            scale_max: 1.0,
+            scale_step: 0.05,
+            ..Default::default()
+        };
+        let result = detect_start_button(&gray_frame, &config).unwrap().unwrap();
+        assert!(!result.active);
+        assert!(result.blue_ratio < config.min_blue_ratio);
     }
 
     #[test]
