@@ -269,13 +269,6 @@ impl EnchantmentHelperApp {
             self.status = "Сначала выберите окно игры.".into();
             return;
         }
-        if !self.enchant.start_button_region.is_configured() {
-            self.status = "Сначала выделите мышью прямоугольник кнопки «Начать» на превью окна.".into();
-            self.select_start_region = true;
-            self.mode = Mode::Enchant;
-            return;
-        }
-
         self.completed_runs = 0;
         self.consecutive_matches = 0;
         self.automation_phase = Some(AutomationPhase::WaitingForStart);
@@ -287,12 +280,10 @@ impl EnchantmentHelperApp {
             self.runs
         );
         self.log(format!(
-            "[automation] armed; target runs={} start ROI=({}, {}, {}, {})",
+            "[automation] armed; target runs={} start-template threshold={:.2} blue ratio={:.2}",
             self.runs,
-            self.enchant.start_button_region.x,
-            self.enchant.start_button_region.y,
-            self.enchant.start_button_region.width,
-            self.enchant.start_button_region.height
+            self.enchant.start_template_threshold,
+            self.enchant.min_blue_ratio
         ));
     }
 
@@ -548,7 +539,12 @@ impl EnchantmentHelperApp {
 
         ui.separator();
         ui.label(egui::RichText::new("Кнопка «Начать»").strong());
-        ui.label("Выделите её область мышью на превью окна игры. Распознавание проверяет синие пиксели только внутри выделенного прямоугольника.");
+        ui.label("Автоматический поиск по шаблону, взятому из загруженного кадра. Поиск отличает «Начать» от соседних «Купить» и «Закрыть»; синий цвет подтверждает активность.");
+        ui.add(
+            egui::Slider::new(&mut config.start_template_threshold, 0.45..=0.98)
+                .step_by(0.01)
+                .text("Порог совпадения шаблона START"),
+        );
         ui.add(
             egui::Slider::new(&mut config.min_blue_ratio, 0.05..=0.90)
                 .step_by(0.01)
@@ -568,17 +564,14 @@ impl EnchantmentHelperApp {
             ui.end_row();
         });
         if !region.is_configured() {
-            ui.colored_label(
-                egui::Color32::YELLOW,
-                "Область START не задана — автоматические клики пока заблокированы.",
-            );
+            ui.label("Ручная область не задана — используется автоматический поиск по шаблону.");
         } else {
             ui.horizontal(|ui| {
                 ui.label(format!(
-                    "ROI: x={} y={} · {}×{} px",
+                    "Ручная область: x={} y={} · {}×{} px",
                     region.x, region.y, region.width, region.height
                 ));
-                if ui.small_button("Сбросить").clicked() {
+                if ui.small_button("Сбросить и искать шаблоном").clicked() {
                     *region = Region::default();
                 }
             });
@@ -622,7 +615,7 @@ impl EnchantmentHelperApp {
         }
 
         ui.horizontal(|ui| {
-            ui.label("Перетащите мышью по кнопке «Начать» на превью ниже:");
+            ui.label("Кнопка START находится шаблоном автоматически. Ручную область можно задать как альтернативу:");
             ui.checkbox(&mut self.select_start_region, "Выделить область");
             if ui.button("Обновить кадр").clicked() {
                 self.capture_selected_preview(ctx);
@@ -685,7 +678,7 @@ impl EnchantmentHelperApp {
                             };
                             self.mode = Mode::Enchant;
                             self.select_start_region = false;
-                            self.status = "Область кнопки START сохранена. Проверьте рамку анализом тестового кадра перед первым запуском.".into();
+                            self.status = "Ручная область кнопки START сохранена; автоматический шаблонный поиск отключён до сброса области.".into();
                             self.log(format!(
                                 "[ui] START ROI set to ({x1}, {y1}, {}, {})",
                                 x2 - x1,
