@@ -422,107 +422,189 @@ impl EnchantmentHelperApp {
 
     fn scan_inventory_snapshot(
         &mut self,
-        ctx: &egui::Context,
         frame: &opencv::core::Mat,
         initial: bool,
     ) -> Result<(), String> {
-        let scan = scan_inventory(frame, &self.inventory)
-            .map_err(|error| format!("Не удалось просканировать инвентарь: {error}"))?;
+        let mut config = self.inventory.clone();
+        if self.page_index > 0 {
+            // The catalyst is stored on page one. On later pages every grid
+            // position is an ordinary item slot, including the top-left one.
+            config.amulet_row = u8::MAX;
+            config.amulet_col = u8::MAX;
+            config.start_row = 0;
+            config.start_col = 0;
+        }
+
+        let scan = scan_inventory(frame, &config)
+            .map_err(|error| format!("Не удалось просканировать страницу инвентаря: {error}"))?;
         validate_inventory_scan(&scan, self.inventory_grid_region, frame)?;
 
-        let previous = self.logical_inventory.clone();
-        for old in &previous {
-            if old.kind != CellKind::Occupied {
-                continue;
-            }
-            if let Some(updated) = scan
-                .cells
-                .iter()
-                .find(|cell| cell.row == old.row && cell.col == old.col)
-            {
-                if updated.kind == CellKind::Empty {
-                    self.log(format!(
-                        "[inventory][table] slot r{}c{} changed ITEM -> EMPTY; it will be skipped",
-                        old.row + 1,
-                        old.col + 1
+        self.logical_inventory = scan.cells.clone();
+        self.current_page_fingerprint =
+            Some(inventory_page_fingerprint(frame, self.inventory_grid_region)?);
+
+        if self.page_index == 0 && !self.amulet_inserted {
+            let amulet = self.logical_inventory.iter().find(|cell| {
+                cell.row == self.inventory.amulet_row && cell.col == self.inventory.amulet_col
+            });
+            match amulet {
+                Some(cell) if cell.score >= self.inventory.threshold => {
+                    self.amulet_slot = Some(cell.clone());
+                }
+                Some(cell) => {
+                    self.amulet_slot = None;
+                    return Err(format!(
+                        "Амулет не распознан в ячейке {}:{} (оценка {:.3}, порог {:.3}).",
+                        cell.row + 1,
+                        cell.col + 1,
+                        cell.score,
+                        self.inventory.threshold
                     ));
+                }
+                None => {
+                    self.amulet_slot = None;
+                    return Err("Не найдена настроенная ячейка амулета.".into());
                 }
             }
         }
 
-        // Publish the new table and diagnostic overlay before validating the
-        // configured amulet cell, so the user can inspect a failed scan safely.
-        self.logical_inventory = scan.cells.clone();
-        for line in &scan.log {
-            self.log(line.clone());
-        }
-
-        let candidate_count = self
+        let item_count = self
             .logical_inventory
             .iter()
             .filter(|cell| cell.kind == CellKind::Occupied)
             .count();
-        self.save_debug("inventory_live_overlay.png", &scan.overlay);
-        self.save_debug("inventory_live_score_map.png", &scan.score_map);
-        self.set_preview(ctx, &scan.overlay);
-
-        let amulet = scan.cells.iter().find(|cell| {
-            cell.row == self.inventory.amulet_row && cell.col == self.inventory.amulet_col
-        });
-        let amulet_error = match amulet {
-            Some(cell) if cell.score >= self.inventory.threshold => {
-                self.amulet_slot = Some(cell.clone());
-                None
-            }
-            Some(cell) => {
-                self.amulet_slot = None;
-                Some(format!(
-                    "Амулет не распознан в ячейке {}:{} (оценка {:.3}, порог {:.3}).",
-                    cell.row + 1,
-                    cell.col + 1,
-                    cell.score,
-                    self.inventory.threshold
-                ))
-            }
-            None => {
-                self.amulet_slot = None;
-                Some("Ячейка амулета не входит в область инвентаря. Проверьте строку и столбец.".into())
-            }
-        };
-
         self.summary = format!(
-            "Логическая таблица: {} ячеек · предметов: {} · амулет: {} · попыток: {}",
-            self.logical_inventory.len(),
-            candidate_count,
-            if self.amulet_slot.is_some() { "найден" } else { "не подтверждён" },
-            self.completed_runs
+            "Проход {}/{} · страница {} · предметов на странице: {} · обработано: {}",
+            self.current_pass,
+            self.passes_total,
+            self.page_index + 1,
+            item_count,
+            self.items_processed_in_pass
         );
 
-        if initial {
-            self.log(format!(
-                "[inventory][table] initialized: cells={} items={} amulet=r{}c{} valid={}",
-                self.logical_inventory.len(),
-                candidate_count,
-                self.inventory.amulet_row + 1,
-                self.inventory.amulet_col + 1,
-                self.amulet_slot.is_some()
+        self.log(format!(
+            "{} страница {}: распознано предметов {}.",
+            if initial { "Начальное сканирование:" } else { "Обновление:" },
+            self.page_index + 1,
+            item_count
+        ));
+        Ok(())
+    }
+
+    fn next_unattempted_item(&self) -> Option<CellDebug> {
+        self.logical_inventory
+            .iter()
+            .find(|cell| {
+                cell.kind == CellKind::Occupied
+                    && !self
+                        .processed_slots_current_page
+                        .contains(&(cell.row, cell.col))
+            })
+            .cloned()
+    }
+
+    fn begin_scroll_down(&mut self, handle: isize) -> Result<(), String> {
+        let x = self.inventory_grid_region.x + self.inventory_grid_region.width / 2;
+        let y = self.inventory_grid_region.y + self.inventory_grid_region.height / 2;
+        scroll_window(handle, x, y, -120)?;
+        self.automation_phase = Some(AutomationPhase::CheckNextPage);
+        self.phase_started = Instant::now();
+        self.next_automation_poll = Instant::now() + Duration::from_millis(750);
+        self.status = format!(
+            "Проход {}: прокрутка инвентаря вниз после страницы {}.",
+            self.current_pass,
+            self.page_index + 1
+        );
+        self.log(format!(
+            "Прокрутка вниз от страницы {}.",
+            self.page_index + 1
+        ));
+        Ok(())
+    }
+
+    fn start_next_pass(&mut self, handle: isize, frame: &opencv::core::Mat) {
+        self.current_pass = self.current_pass.saturating_add(1);
+        self.items_processed_in_pass = 0;
+        self.surviving_items_in_pass = 0;
+        self.page_index = 0;
+        self.processed_slots_current_page.clear();
+        self.current_item = None;
+        self.reset_detection_streak();
+
+        if let Err(error) = self.scan_inventory_snapshot(frame, false) {
+            self.stop_automation(&format!(
+                "Не удалось начать следующий проход с первой страницы: {error}"
             ));
-        } else {
-            self.log(format!(
-                "[inventory][table] refreshed after OK: items currently detected={candidate_count} amulet_valid={}",
-                self.amulet_slot.is_some()
-            ));
+            return;
         }
 
-        match amulet_error {
-            Some(error) => Err(error),
-            None => Ok(()),
+        self.log(format!(
+            "Начат проход {} из {}. Возврат к первой странице выполнен.",
+            self.current_pass, self.passes_total
+        ));
+        if let Some(item) = self.next_unattempted_item() {
+            self.current_item = Some(item.clone());
+            self.automation_phase = Some(AutomationPhase::InsertItem);
+            self.phase_started = Instant::now();
+            self.next_automation_poll = Instant::now() + Duration::from_millis(300);
+            self.status = format!(
+                "Проход {} из {}: следующий уцелевший предмет — строка {}, столбец {}.",
+                self.current_pass,
+                self.passes_total,
+                item.row + 1,
+                item.col + 1
+            );
+        } else if let Err(error) = self.begin_scroll_down(handle) {
+            self.stop_automation(&format!("Не удалось перейти к следующей странице: {error}"));
         }
     }
 
-    fn scan_inventory_manually(&mut self, ctx: &egui::Context) {
-        if self.automation_phase.is_some() {
-            self.status = "Нельзя вручную сканировать инвентарь во время автоматизации.".into();
+    fn finish_pass_at_bottom(&mut self, handle: isize, frame: &opencv::core::Mat) {
+        let pages = self.page_index + 1;
+        self.log(format!(
+            "Проход {} завершён: просмотрено страниц {}, обработано предметов {}, уцелело {}.",
+            self.current_pass,
+            pages,
+            self.items_processed_in_pass,
+            self.surviving_items_in_pass
+        ));
+
+        if self.current_pass >= self.passes_total || self.surviving_items_in_pass == 0 {
+            let reason = if self.surviving_items_in_pass == 0 && self.current_pass < self.passes_total {
+                format!(
+                    "Работа завершена досрочно: после прохода {} не осталось уцелевших предметов.",
+                    self.current_pass
+                )
+            } else {
+                format!(
+                    "Завершено: выполнено {} полных проходов по {} страницам инвентаря.",
+                    self.current_pass, pages
+                )
+            };
+            self.stop_automation(&reason);
+            return;
+        }
+
+        self.return_scroll_remaining = self.page_index;
+        if self.return_scroll_remaining == 0 {
+            self.start_next_pass(handle, frame);
+        } else {
+            self.automation_phase = Some(AutomationPhase::ReturnToFirstPage);
+            self.phase_started = Instant::now();
+            self.next_automation_poll = Instant::now();
+            self.status = format!(
+                "Проход {} завершён. Возврат с последней страницы на первую.",
+                self.current_pass
+            );
+            self.log(format!(
+                "Возврат к первой странице: прокруток вверх {}.",
+                self.return_scroll_remaining
+            ));
+        }
+    }
+
+    fn start_automation(&mut self) {
+        if self.run_state == RunState::Running || self.run_state == RunState::Paused {
             return;
         }
         let Some(handle) = self.selected_window else {
@@ -531,64 +613,10 @@ impl EnchantmentHelperApp {
         };
         if !self.inventory_grid_region.is_configured() {
             self.select_inventory_region = true;
-            self.status = "Сначала выделите всю сетку инвентаря на превью.".into();
+            self.status = "Сначала снимите кадр и выделите всю сетку инвентаря.".into();
             return;
         }
 
-        let frame = match capture_window(handle) {
-            Ok(frame) => frame,
-            Err(error) => {
-                self.status = format!("Не удалось получить кадр игры: {error}");
-                return;
-            }
-        };
-
-        self.attempted_items.clear();
-        self.current_item = None;
-        self.completed_runs = 0;
-        self.logical_inventory.clear();
-
-        match self.scan_inventory_snapshot(ctx, &frame, true) {
-            Ok(()) => {
-                self.status = "Сканирование завершено без игровых кликов. Проверьте логическую таблицу перед запуском.".into();
-                self.log("[inventory] manual live scan complete; no game input was sent");
-            }
-            Err(error) => {
-                self.status = error.clone();
-                self.log(format!("[inventory][error] {error}"));
-            }
-        }
-    }
-
-    fn next_unattempted_item(&self) -> Option<CellDebug> {
-        self.logical_inventory
-            .iter()
-            .find(|cell| {
-                cell.kind == CellKind::Occupied
-                    && !self.attempted_items.contains(&(cell.row, cell.col))
-            })
-            .cloned()
-    }
-
-    fn start_automation(&mut self, ctx: &egui::Context) {
-        if self.run_state == RunState::Running || self.run_state == RunState::Paused {
-            return;
-        }
-        if self.selected_window.is_none() {
-            self.status = "Сначала выберите окно игры.".into();
-            return;
-        }
-        if !self.inventory_grid_region.is_configured() {
-            self.select_inventory_region = true;
-            self.select_start_region = false;
-            self.mode = Mode::Inventory;
-            self.status = "Перед запуском обведите на превью всю сетку инвентаря — от первой до последней ячейки.".into();
-            return;
-        }
-
-        let Some(handle) = self.selected_window else {
-            return;
-        };
         let frame = match capture_window(handle) {
             Ok(frame) => frame,
             Err(error) => {
@@ -597,50 +625,40 @@ impl EnchantmentHelperApp {
             }
         };
 
-        self.completed_runs = 0;
+        self.current_pass = 1;
+        self.items_processed_in_pass = 0;
+        self.surviving_items_in_pass = 0;
+        self.page_index = 0;
+        self.current_page_fingerprint = None;
+        self.return_scroll_remaining = 0;
         self.paused_at = None;
         self.reset_detection_streak();
-        self.attempted_items.clear();
+        self.processed_slots_current_page.clear();
         self.current_item = None;
         self.amulet_slot = None;
+        self.amulet_inserted = false;
         self.logical_inventory.clear();
 
-        if let Err(error) = self.scan_inventory_snapshot(ctx, &frame, true) {
+        if let Err(error) = self.scan_inventory_snapshot(&frame, true) {
             self.run_state = RunState::Stopped;
             self.automation_phase = None;
             self.status = error.clone();
-            self.log(format!("[automation] initial inventory scan failed: {error}"));
+            self.log(format!("Не удалось начать автоматизацию: {error}"));
             return;
         }
 
-        let Some(item) = self.next_unattempted_item() else {
-            self.run_state = RunState::Stopped;
-            self.automation_phase = None;
-            self.status = "В инвентаре не найдено предметов для зачарования после стартовой ячейки.".into();
-            return;
-        };
-
-        self.current_item = Some(item.clone());
-        self.reset_detection_streak();
         self.automation_phase = Some(AutomationPhase::DetectEnchantDialog);
         self.run_state = RunState::Running;
         self.phase_started = Instant::now();
         self.next_automation_poll = Instant::now() + Duration::from_millis(250);
         self.last_wait_log = Instant::now();
         self.status = format!(
-            "Инвентарь просканирован. Поиск окна зачарования перед выбором амулета и предмета r{}c{}. F12 — аварийный стоп.",
-            item.row + 1,
-            item.col + 1
+            "Первая страница принята за текущую. План: {} полных проходов по всем страницам инвентаря. Ищется окно зачарования. F12 — аварийный стоп.",
+            self.passes_total
         );
         self.log(format!(
-            "[automation] armed; target runs={} inventory items={} first=r{}c{}",
-            self.runs,
-            self.logical_inventory
-                .iter()
-                .filter(|cell| cell.kind == CellKind::Occupied)
-                .count(),
-            item.row + 1,
-            item.col + 1
+            "Автоматизация запущена: полных проходов — {}. Начинаем с первой страницы.",
+            self.passes_total
         ));
     }
 
