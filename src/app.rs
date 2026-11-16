@@ -671,6 +671,9 @@ impl EnchantmentHelperApp {
             return;
         }
 
+        // Stop collecting one-off window thumbnails before automation starts.
+        self.window_preview_queue.clear();
+
         let handle = self.selected_window.expect("Игровое окно проверено перед запуском");
         let frame = match capture_window(handle) {
             Ok(frame) => frame,
