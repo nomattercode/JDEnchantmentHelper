@@ -5,10 +5,10 @@ Windows desktop application for scanning Jade Dynasty inventory and running a gu
 ## Current workflow
 
 1. Select the Jade Dynasty top-level game window from the dropdown. The app refreshes its preview while it is open.
-2. On the preview, enable **Область сетки инвентаря** and drag around the complete inventory grid, from the upper-left edge of its first cell to the lower-right edge of its last cell. The default logical grid is 6 columns × 8 rows. The selection estimates cell size and spacing; inspect the overlay and adjust the geometry/threshold before automating.
-3. Check the amulet row/column and the first eligible item row/column in **Распознавание и калибровка → Инвентарь**.
+2. On the preview, enable **Область сетки инвентаря** and drag around the complete inventory grid, from the upper-left edge of its first cell to the lower-right edge of its last cell. The default logical grid is 6 columns × 8 rows. The selection estimates cell size and spacing; the scanner verifies that every cell stays inside this rectangle before any click is allowed.
+3. Check the amulet row/column and the first eligible item row/column in **Распознавание и калибровка → Инвентарь**. Press **Сканировать инвентарь** to build and inspect the logical table without sending game input. Correct the grid geometry or occupancy threshold until the table matches the visible bag.
 4. The enchantment dialog is first located from its title bar using `assets/templates/enchant_header.png`, a crop of the supplied reference capture. The last dialog rectangle is saved to `diagnostics\\enchant_window_last_seen.txt`. The Start button is then located inside that dialog using `assets/templates/start_button_active.png`, a 71×28 crop. The matcher uses the button outline and Cyrillic label to distinguish **Начать** from the neighboring **Купить** and **Закрыть** buttons, then checks saturated blue pixels inside the button. Its last rectangle is saved to `diagnostics\\start_button_last_seen.txt`. A manual Start ROI remains available as an override.
-5. Choose 1–10 passes using the left/right arrows and press **Начать зачарование**.
+5. Choose 1–10 passes using the left/right arrows and press **Начать зачарование**. The automation performs a fresh inventory scan before starting; the preview scan is a separate no-click check.
 
 ## Automation sequence
 
@@ -27,7 +27,7 @@ The logical inventory table in the UI shows the amulet, available items, attempt
 
 The supplied reference image trains two templates: the enchantment title bar and the active Start button. It does **not** show the inventory grid. Therefore inventory-panel detection is not trained from this file; the complete grid must currently be selected manually on the live preview once per application session. The grid shape defaults to 6×8 with 90% cell-to-step ratio; adjust X/Y, cell dimensions, spacing, start cell, amulet cell and occupancy threshold to match the actual game UI.
 
-The scanner classifies cells from image texture/edge/saturation scores, not item identity. Keep the inventory stable while scanning; do not sort or move items during an automated series. If the inventory changes layout, stop and rescan/recalibrate before continuing.
+The scanner classifies cells from image texture/edge/saturation scores, not item identity. Use **Сканировать инвентарь** to inspect the grid before the first run. All cells must fit inside the calibrated grid region and captured frame; an out-of-region cell blocks automation before a click. The live grid is rechecked again immediately before every right-click. Keep the inventory stable while scanning; do not sort or move items during an automated series. If the inventory changes layout, stop and rescan/recalibrate before continuing.
 
 The enchant-header matcher searches the captured game window at multiple scales and estimates the 302×200 dialog bounds from the 299×23 title-bar crop. The Start matcher searches only inside those dialog bounds. The Start template threshold defaults to 0.68. The blue ratio threshold defaults to 0.45; the supplied active button crop measured approximately 0.94 blue-pixel coverage with the configured HSV range. Adjust these only after checking the marked rectangles on a real game frame.
 
@@ -63,3 +63,5 @@ The script checks formatting, compiles all targets, runs Release tests and creat
 ## Run
 
 Use `run.bat` in the repository root. It adds the vcpkg OpenCV DLL folder to PATH and starts the Release executable.
+
+GitHub Actions does not run automatically on pushes or pull requests; workflow runs are manual only.
