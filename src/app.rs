@@ -1681,7 +1681,13 @@ impl eframe::App for EnchantmentHelperApp {
                     RunState::Running => ("В РАБОТЕ", egui::Color32::from_rgb(70, 190, 125)),
                     RunState::Paused => ("ПАУЗА", egui::Color32::from_rgb(225, 175, 65)),
                     RunState::Stopped => ("ОСТАНОВЛЕНО", egui::Color32::from_rgb(180, 115, 115)),
-                    RunState::Idle => ("ГОТОВО К ЗАПУСКУ", ui.visuals().weak_text_color()),
+                    RunState::Idle if self.selected_window_data().is_none() => {
+                        ("ВЫБЕРИТЕ ИГРОВОЕ ОКНО", ui.visuals().weak_text_color())
+                    }
+                    RunState::Idle if !self.inventory_grid_region.is_configured() => {
+                        ("НАСТРОЙТЕ ИНВЕНТАРЬ", ui.visuals().weak_text_color())
+                    }
+                    RunState::Idle => ("ГОТОВО К ЗАПУСКУ", egui::Color32::from_rgb(70, 190, 125)),
                 };
                 ui.label(
                     egui::RichText::new(state)
@@ -1764,7 +1770,7 @@ impl eframe::App for EnchantmentHelperApp {
 
                     columns[1].vertical(|ui| {
                         ui.group(|ui| {
-                            ui.label(egui::RichText::new("3. ПАРАМЕТРЫ СЕРИИ").strong());
+                            ui.label(egui::RichText::new("3. ЗАПУСК И УПРАВЛЕНИЕ").strong());
                             ui.add_space(4.0);
 
                             ui.label("Полных проходов по всем страницам");
@@ -1810,6 +1816,14 @@ impl eframe::App for EnchantmentHelperApp {
                                 .min_size(egui::vec2(ui.available_width(), 46.0)),
                             ).clicked() {
                                 self.start_automation();
+                            }
+                            if !can_start {
+                                let hint = if self.selected_window_data().is_none() {
+                                    "Сначала выберите игровое окно в шаге 1."
+                                } else {
+                                    "Сначала настройте сетку инвентаря в шаге 2."
+                                };
+                                ui.small(egui::RichText::new(hint).color(ui.visuals().weak_text_color()));
                             }
 
                             ui.horizontal(|ui| {
