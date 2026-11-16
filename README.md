@@ -16,8 +16,8 @@ Windows desktop application for scanning Jade Dynasty inventory and running a gu
 - Verify that the configured amulet cell is occupied.
 - Find the enchantment dialog title bar before sending any inventory clicks; if it is not found within 30 seconds, stop.
 - Right-click the amulet cell, then right-click the first available occupied item cell.
-- Find the Start button inside the detected enchantment dialog by template matching. Wait until the button is blue and confirm that state in two consecutive captures before left-clicking its centre.
-- Wait for either supplied OK template (success or failure). In the result phase, search the full captured game surface rather than only the enchantment-dialog rectangle; this supports a separate result popup or a result dialog that replaces the enchant window. Require two consecutive matches before left-clicking OK.
+- Find the Start button inside the detected enchantment dialog by template matching. Wait until the button is blue and confirm it in two consecutive captures at the same rectangle (allowing at most 3 px of capture jitter) before left-clicking its centre.
+- Wait for either supplied OK template (success or failure). In the result phase, search the full captured game surface rather than only the enchantment-dialog rectangle; this supports a separate result popup or a result dialog that replaces the enchant window. Require two consecutive matches at the same rectangle (allowing at most 3 px of capture jitter) before left-clicking OK.
 - Rescan the inventory. Replace the logical table with the fresh scan and compare occupied slots. Empty slots are removed from the available queue; a still-occupied item is marked attempted and is not clicked again.
 - Repeat with the next unattempted occupied item until the selected pass count is reached or no eligible items remain.
 
@@ -31,7 +31,7 @@ The scanner classifies cells from image texture/edge/saturation scores, not item
 
 The enchant-header matcher searches the captured game window at multiple scales and estimates the 302×200 dialog bounds from the 299×23 title-bar crop. The Start matcher searches only inside those dialog bounds. The Start template threshold defaults to 0.68. The blue ratio threshold defaults to 0.45; the supplied active button crop measured approximately 0.94 blue-pixel coverage with the configured HSV range. Adjust these only after checking the marked rectangles on a real game frame.
 
-The OK detector uses the supplied success/failure templates (82×42 px) and a default confidence threshold of 0.84. After Start has been clicked, the result phase searches the full captured game frame because the OK popup may be outside the enchantment dialog or may replace it. The application still requires two consecutive matches before clicking. If the result button is visually different from the references, stop and update the templates before using automation.
+The OK detector uses the supplied success/failure templates (82×42 px) and a default confidence threshold of 0.84. After Start has been clicked, the result phase searches the full captured game frame because the OK popup may be outside the enchantment dialog or may replace it. The application still requires two consecutive matches at a stable position (3 px jitter tolerance) before clicking. If the result button is visually different from the references, stop and update the templates before using automation.
 
 ## Safety controls
 
