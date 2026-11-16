@@ -24,6 +24,7 @@ enum Mode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AutomationPhase {
+    DetectEnchantDialog,
     InsertAmulet,
     InsertItem,
     WaitingForStart,
@@ -51,6 +52,7 @@ pub struct EnchantmentHelperApp {
     amulet_slot: Option<CellDebug>,
     current_item: Option<CellDebug>,
     last_start_button: Option<Region>,
+    last_enchant_window: Option<Region>,
     status: String,
     image_path: String,
     output_dir: String,
@@ -89,6 +91,7 @@ impl Default for EnchantmentHelperApp {
             amulet_slot: None,
             current_item: None,
             last_start_button: None,
+            last_enchant_window: None,
             status: "Выберите окно игры и один раз выделите область сетки инвентаря.".into(),
             image_path: String::new(),
             output_dir: "diagnostics".into(),
@@ -435,13 +438,13 @@ impl EnchantmentHelperApp {
 
         self.current_item = Some(item.clone());
         self.consecutive_matches = 0;
-        self.automation_phase = Some(AutomationPhase::InsertAmulet);
+        self.automation_phase = Some(AutomationPhase::DetectEnchantDialog);
         self.run_state = RunState::Running;
         self.phase_started = Instant::now();
         self.next_automation_poll = Instant::now() + Duration::from_millis(250);
         self.last_wait_log = Instant::now();
         self.status = format!(
-            "Инвентарь просканирован. Подготовка амулета и предмета r{}c{}. F12 — аварийный стоп.",
+            "Инвентарь просканирован. Поиск окна зачарования перед выбором амулета и предмета r{}c{}. F12 — аварийный стоп.",
             item.row + 1,
             item.col + 1
         );
@@ -497,6 +500,58 @@ impl EnchantmentHelperApp {
         };
 
         match self.automation_phase {
+            Some(AutomationPhase::DetectEnchantDialog) => {
+                let analysis = match analyze_enchant_window(&frame, &self.enchant) {
+                    Ok(analysis) => analysis,
+                    Err(error) => {
+                        self.stop_automation(&format!("Ошибка поиска окна зачарования: {error}"));
+                        return;
+                    }
+                };
+                self.set_preview(ctx, &analysis.overlay);
+                if let Some(rect) = analysis.dialog_window {
+                    let detected = Region {
+                        x: rect.x,
+                        y: rect.y,
+                        width: rect.width,
+                        height: rect.height,
+                    };
+                    self.last_enchant_window = Some(detected);
+                    let path = std::path::Path::new(&self.output_dir)
+                        .join("enchant_window_last_seen.txt");
+                    let saved = (|| -> Result<(), String> {
+                        if let Some(parent) = path.parent() {
+                            std::fs::create_dir_all(parent)
+                                .map_err(|error| format!("Не удалось создать папку координат: {error}"))?;
+                        }
+                        std::fs::write(
+                            &path,
+                            format!(
+                                "window=0x{handle:X}\nx={}\ny={}\nwidth={}\nheight={}\n",
+                                detected.x, detected.y, detected.width, detected.height
+                            ),
+                        )
+                        .map_err(|error| format!("Не удалось сохранить координаты окна зачарования: {error}"))
+                    })();
+                    if let Err(error) = saved {
+                        self.log(format!("[automation] {error}"));
+                    }
+                    self.log(format!(
+                        "[automation] enchant dialog detected at ({},{},{},{})",
+                        rect.x, rect.y, rect.width, rect.height
+                    ));
+                    self.automation_phase = Some(AutomationPhase::InsertAmulet);
+                    self.phase_started = Instant::now();
+                    self.next_automation_poll = Instant::now() + Duration::from_millis(350);
+                    self.status = "Окно зачарования найдено. Выбор амулета.".into();
+                } else if now.duration_since(self.phase_started) >= Duration::from_secs(30) {
+                    self.stop_automation("Окно зачарования не найдено за 30 секунд. Клики по инвентарю не выполнялись.");
+                } else if now.duration_since(self.last_wait_log) >= Duration::from_secs(10) {
+                    self.last_wait_log = now;
+                    self.log("[automation] waiting for enchant dialog header");
+                }
+                return;
+            }
             Some(AutomationPhase::InsertAmulet) => {
                 let Some(amulet) = self.amulet_slot.clone() else {
                     self.stop_automation("В логической таблице не задана ячейка амулета.");
@@ -608,7 +663,7 @@ impl EnchantmentHelperApp {
                 };
 
                 self.current_item = Some(next_item.clone());
-                self.automation_phase = Some(AutomationPhase::InsertAmulet);
+                self.automation_phase = Some(AutomationPhase::DetectEnchantDialog);
                 self.phase_started = Instant::now();
                 self.next_automation_poll = Instant::now() + Duration::from_millis(450);
                 self.consecutive_matches = 0;
@@ -628,12 +683,16 @@ impl EnchantmentHelperApp {
 
         let phase = self.automation_phase;
         let timeout = match phase {
+            Some(AutomationPhase::DetectEnchantDialog) => Duration::from_secs(30),
             Some(AutomationPhase::WaitingForStart) => Duration::from_secs(45),
             Some(AutomationPhase::WaitingForOk) => Duration::from_secs(180),
             _ => Duration::from_secs(30),
         };
         if now.duration_since(self.phase_started) > timeout {
             let message = match phase {
+                Some(AutomationPhase::DetectEnchantDialog) => {
+                    "Тайм-аут: окно зачарования не обнаружено."
+                }
                 Some(AutomationPhase::WaitingForStart) => {
                     "Тайм-аут: кнопка «Начать» не появилась или осталась неактивной."
                 }
@@ -654,6 +713,42 @@ impl EnchantmentHelperApp {
             }
         };
         self.set_preview(ctx, &analysis.overlay);
+
+        if let Some(dialog) = analysis.dialog_window {
+            let detected_dialog = Region {
+                x: dialog.x,
+                y: dialog.y,
+                width: dialog.width,
+                height: dialog.height,
+            };
+            if self.last_enchant_window != Some(detected_dialog) {
+                self.last_enchant_window = Some(detected_dialog);
+                let path = std::path::Path::new(&self.output_dir)
+                    .join("enchant_window_last_seen.txt");
+                let saved = (|| -> Result<(), String> {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|error| format!("Не удалось создать папку координат: {error}"))?;
+                    }
+                    std::fs::write(
+                        &path,
+                        format!(
+                            "window=0x{handle:X}\nx={}\ny={}\nwidth={}\nheight={}\n",
+                            detected_dialog.x, detected_dialog.y,
+                            detected_dialog.width, detected_dialog.height
+                        ),
+                    )
+                    .map_err(|error| format!("Не удалось сохранить координаты окна зачарования: {error}"))
+                })();
+                match saved {
+                    Ok(()) => self.log(format!(
+                        "[automation] saved enchant-window coordinates to {}",
+                        path.display()
+                    )),
+                    Err(error) => self.log(format!("[automation] {error}")),
+                }
+            }
+        }
 
         if let Some(button) = &analysis.start_button {
             let detected = Region {
@@ -987,6 +1082,12 @@ impl EnchantmentHelperApp {
             ui.add(egui::DragValue::new(&mut region.height).range(0..=2000));
             ui.end_row();
         });
+        if let Some(region) = self.last_enchant_window {
+            ui.small(format!(
+                "Последнее найденное окно зачарования: ({}, {}) · {}×{} px",
+                region.x, region.y, region.width, region.height
+            ));
+        }
         if let Some(region) = self.last_start_button {
             ui.small(format!(
                 "Последнее найденное положение START: ({}, {}) · {}×{} px",
@@ -1046,6 +1147,7 @@ impl EnchantmentHelperApp {
                 self.current_item = None;
                 self.enchant.start_button_region = Region::default();
                 self.last_start_button = None;
+                self.last_enchant_window = None;
                 self.status = "Окно изменено. Повторно выделите сетку инвентаря; START будет найден по шаблону.".into();
                 self.capture_selected_preview(ctx);
                 self.log("[window] target changed; old ROI coordinates cleared");
