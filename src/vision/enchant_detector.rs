@@ -161,6 +161,27 @@ fn clip_region(region: Region, frame: &Mat) -> Option<Rect> {
     }
 }
 
+fn intersect_rects(left: Rect, right: Rect) -> Option<Rect> {
+    let x1 = left.x.max(right.x);
+    let y1 = left.y.max(right.y);
+    let x2 = (left.x + left.width).min(right.x + right.width);
+    let y2 = (left.y + left.height).min(right.y + right.height);
+
+    (x2 > x1 && y2 > y1).then(|| Rect::new(x1, y1, x2 - x1, y2 - y1))
+}
+
+/// Restrict result-popup detection to the central two-thirds of the game frame.
+fn centered_result_region(frame: &Mat) -> Rect {
+    let margin_x = frame.cols() / 6;
+    let margin_y = frame.rows() / 6;
+    Rect::new(
+        margin_x,
+        margin_y,
+        (frame.cols() - 2 * margin_x).max(1),
+        (frame.rows() - 2 * margin_y).max(1),
+    )
+}
+
 fn blue_mask(image: &Mat) -> opencv::Result<Mat> {
     let mut hsv = Mat::default();
     imgproc::cvt_color(
@@ -281,9 +302,9 @@ pub fn analyze_enchant_window(
     analyze_enchant_window_inner(frame, cfg, false)
 }
 
-/// Result-screen mode searches the whole captured game window for OK.
-/// It is used only after Start was clicked, when the game may replace or cover
-/// the enchant dialog with a separate result popup.
+/// Result-screen mode searches the central part of the captured game window.
+/// It is used after Start was clicked, when the game displays its result popup
+/// in the middle of the screen.
 pub fn analyze_enchant_result(
     frame: &Mat,
     cfg: &EnchantDetectorConfig,
@@ -304,8 +325,9 @@ fn analyze_enchant_window_inner(
     let mut ok_button = empty_match();
     let mut start_button = None;
 
-    if let Some(dialog) = dialog_window {
-        let search_rect = if let Some(region) = cfg.search_region {
+    if !search_ok_full_frame {
+        if let Some(dialog) = dialog_window {
+            let search_rect = if let Some(region) = cfg.search_region {
             let requested = clip_region(region, frame).ok_or_else(|| {
                 opencv::Error::new(core::StsBadArg, "Область поиска ОК вне кадра")
             })?;
@@ -350,16 +372,24 @@ fn analyze_enchant_window_inner(
         }
         ok_button = best;
 
-        start_button = detect_start_button(frame, dialog, cfg)?;
+            start_button = detect_start_button(frame, dialog, cfg)?;
+        }
     }
 
     if search_ok_full_frame {
+        let center_rect = centered_result_region(frame);
         let search_rect = if let Some(region) = cfg.search_region {
-            clip_region(region, frame).ok_or_else(|| {
+            let requested = clip_region(region, frame).ok_or_else(|| {
                 opencv::Error::new(core::StsBadArg, "Область поиска ОК вне кадра")
+            })?;
+            intersect_rects(center_rect, requested).ok_or_else(|| {
+                opencv::Error::new(
+                    core::StsBadArg,
+                    "Заданная область поиска ОК не пересекается с центральной зоной экрана",
+                )
             })?
         } else {
-            Rect::new(0, 0, frame.cols(), frame.rows())
+            center_rect
         };
         let search = Mat::roi(frame, search_rect)?.try_clone()?;
         let source = grayscale(&search)?;
@@ -424,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn result_ok_is_found_outside_enchant_dialog() {
+    fn result_ok_is_found_in_center_outside_enchant_dialog() {
         let mut frame = Mat::new_rows_cols_with_default(
             340,
             500,
@@ -438,7 +468,13 @@ mod tests {
         header.copy_to(&mut header_roi).unwrap();
 
         let ok = decode_image(SUCCESS_TEMPLATE).unwrap();
-        let mut ok_roi = Mat::roi_mut(&mut frame, Rect::new(350, 240, ok.cols(), ok.rows())).unwrap();
+        let expected_rect = Rect::new(
+            (frame.cols() - ok.cols()) / 2,
+            (frame.rows() - ok.rows()) / 2,
+            ok.cols(),
+            ok.rows(),
+        );
+        let mut ok_roi = Mat::roi_mut(&mut frame, expected_rect).unwrap();
         ok.copy_to(&mut ok_roi).unwrap();
 
         let cfg = EnchantDetectorConfig {
@@ -453,8 +489,32 @@ mod tests {
         assert!(result.ok_button.found, "score={}", result.ok_button.score);
         assert_eq!(
             result.ok_button.rect,
-            Some(Rect::new(350, 240, ok.cols(), ok.rows()))
+            Some(expected_rect)
         );
+    }
+
+    #[test]
+    fn result_ok_outside_center_region_is_ignored() {
+        let mut frame = Mat::new_rows_cols_with_default(
+            260,
+            420,
+            core::CV_8UC3,
+            Scalar::new(28.0, 35.0, 42.0, 0.0),
+        )
+        .unwrap();
+        let ok = decode_image(SUCCESS_TEMPLATE).unwrap();
+        let mut roi = Mat::roi_mut(&mut frame, Rect::new(8, 8, ok.cols(), ok.rows())).unwrap();
+        ok.copy_to(&mut roi).unwrap();
+
+        let cfg = EnchantDetectorConfig {
+            confidence_threshold: 0.95,
+            scale_min: 1.0,
+            scale_max: 1.0,
+            scale_step: 0.05,
+            ..Default::default()
+        };
+        let result = analyze_enchant_result(&frame, &cfg).unwrap();
+        assert!(!result.ok_button.found);
     }
 
     #[test]
