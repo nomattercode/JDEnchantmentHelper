@@ -435,7 +435,7 @@ mod tests {
         )
         .unwrap();
 
-        let ok = decode_image(RESULT_OK_TEMPLATE).unwrap();
+        let ok = decode_image(OK_BUTTON_TEMPLATE).unwrap();
         let expected_rect = Rect::new(
             (frame.cols() - ok.cols()) / 2 + 24,
             (frame.rows() - ok.rows()) / 2 - 18,
@@ -474,7 +474,7 @@ mod tests {
             Scalar::new(28.0, 35.0, 42.0, 0.0),
         )
         .unwrap();
-        let ok = decode_image(RESULT_OK_TEMPLATE).unwrap();
+        let ok = decode_image(OK_BUTTON_TEMPLATE).unwrap();
         let mut roi = Mat::roi_mut(&mut frame, Rect::new(8, 8, ok.cols(), ok.rows())).unwrap();
         ok.copy_to(&mut roi).unwrap();
 
@@ -498,7 +498,7 @@ mod tests {
             Scalar::new(28.0, 35.0, 42.0, 0.0),
         )
         .unwrap();
-        let ok = decode_image(RESULT_OK_TEMPLATE).unwrap();
+        let ok = decode_image(OK_BUTTON_TEMPLATE).unwrap();
         let expected_rect = Rect::new(
             (frame.cols() - ok.cols()) / 2,
             (frame.rows() - ok.rows()) / 2,
