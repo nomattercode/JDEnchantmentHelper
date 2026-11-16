@@ -579,7 +579,7 @@ impl EnchantmentHelperApp {
         };
 
         self.current_item = Some(item.clone());
-        self.consecutive_matches = 0;
+        self.reset_detection_streak();
         self.automation_phase = Some(AutomationPhase::DetectEnchantDialog);
         self.run_state = RunState::Running;
         self.phase_started = Instant::now();
@@ -888,7 +888,7 @@ impl EnchantmentHelperApp {
                 self.automation_phase = Some(AutomationPhase::DetectEnchantDialog);
                 self.phase_started = Instant::now();
                 self.next_automation_poll = Instant::now() + Duration::from_millis(450);
-                self.consecutive_matches = 0;
+                self.reset_detection_streak();
                 self.status = format!(
                     "Таблица обновлена. Следующий предмет: r{}c{} (прогон {} из {}).",
                     next_item.row + 1,
