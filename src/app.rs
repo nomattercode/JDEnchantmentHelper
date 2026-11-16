@@ -12,9 +12,63 @@ use crate::platform::{
 };
 use crate::vision::{
     analyze_enchant_window, load_image, mat_to_rgb, save_png, scan_inventory,
-    inventory_scanner::{CellDebug, CellKind},
+    inventory_scanner::{CellDebug, CellKind, InventoryScan},
     EnchantDetectorConfig, InventoryConfig, Region,
 };
+
+fn validate_inventory_scan(
+    scan: &InventoryScan,
+    region: Region,
+    frame: &opencv::core::Mat,
+) -> Result<(), String> {
+    if !region.is_configured() || region.x < 0 || region.y < 0 {
+        return Err("Область сетки инвентаря не откалибрована.".into());
+    }
+
+    let right = region
+        .x
+        .checked_add(region.width)
+        .ok_or_else(|| "Правая граница сетки выходит за диапазон координат.".to_string())?;
+    let bottom = region
+        .y
+        .checked_add(region.height)
+        .ok_or_else(|| "Нижняя граница сетки выходит за диапазон координат.".to_string())?;
+
+    if right > frame.cols() || bottom > frame.rows() {
+        return Err(format!(
+            "Откалиброванная область инвентаря ({},{} {}x{}) выходит за кадр {}x{}.",
+            region.x,
+            region.y,
+            region.width,
+            region.height,
+            frame.cols(),
+            frame.rows()
+        ));
+    }
+
+    for cell in &scan.cells {
+        let cell_right = cell.rect.x.saturating_add(cell.rect.width);
+        let cell_bottom = cell.rect.y.saturating_add(cell.rect.height);
+        if cell.kind == CellKind::OutOfFrame
+            || cell.rect.x < region.x
+            || cell.rect.y < region.y
+            || cell_right > right
+            || cell_bottom > bottom
+        {
+            return Err(format!(
+                "Ячейка r{}c{} ({},{},{}x{}) выходит за откалиброванную сетку. Перевыделите сетку или проверьте геометрию.",
+                cell.row + 1,
+                cell.col + 1,
+                cell.rect.x,
+                cell.rect.y,
+                cell.rect.width,
+                cell.rect.height
+            ));
+        }
+    }
+
+    Ok(())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
@@ -293,6 +347,7 @@ impl EnchantmentHelperApp {
     ) -> Result<(), String> {
         let scan = scan_inventory(frame, &self.inventory)
             .map_err(|error| format!("Не удалось просканировать инвентарь: {error}"))?;
+        validate_inventory_scan(&scan, self.inventory_grid_region, frame)?;
 
         let amulet = scan
             .cells
@@ -564,6 +619,10 @@ impl EnchantmentHelperApp {
                         return;
                     }
                 };
+                if let Err(error) = validate_inventory_scan(&scan, self.inventory_grid_region, &frame) {
+                    self.stop_automation(&format!("Проверка границ инвентаря перед ПКМ: {error}"));
+                    return;
+                }
                 let verified = scan
                     .cells
                     .iter()
@@ -618,6 +677,10 @@ impl EnchantmentHelperApp {
                         return;
                     }
                 };
+                if let Err(error) = validate_inventory_scan(&scan, self.inventory_grid_region, &frame) {
+                    self.stop_automation(&format!("Проверка границ инвентаря перед ПКМ: {error}"));
+                    return;
+                }
                 let verified = scan
                     .cells
                     .iter()
@@ -1308,41 +1371,45 @@ impl EnchantmentHelperApp {
                                 // The drag rectangle encloses the outer bounds of all cells.
                                 // Existing scanner geometry uses cells at 90% of the grid step.
                                 let step_x = (f64::from(width) / (columns - 1.0 + 0.9))
-                                    .round() as i32;
+                                    .floor() as i32;
                                 let step_y = (f64::from(height) / (rows - 1.0 + 0.9))
-                                    .round() as i32;
-                                self.inventory.origin_x = x1;
-                                self.inventory.origin_y = y1;
-                                self.inventory.step_x = step_x.max(8);
-                                self.inventory.step_y = step_y.max(8);
-                                self.inventory.cell_width =
-                                    ((f64::from(self.inventory.step_x) * 0.9).round() as i32)
-                                        .clamp(8, self.inventory.step_x);
-                                self.inventory.cell_height =
-                                    ((f64::from(self.inventory.step_y) * 0.9).round() as i32)
-                                        .clamp(8, self.inventory.step_y);
-                                self.inventory_grid_region = Region {
-                                    x: x1,
-                                    y: y1,
-                                    width,
-                                    height,
-                                };
-                                self.select_inventory_region = false;
-                                self.mode = Mode::Inventory;
-                                self.status = format!(
-                                    "Сетка инвентаря откалибрована: {}×{}; шаг {}×{} px.",
-                                    self.inventory.columns,
-                                    self.inventory.rows,
-                                    self.inventory.step_x,
-                                    self.inventory.step_y
-                                );
-                                self.log(format!(
-                                    "[ui] inventory grid ROI=({x1},{y1},{width},{height}) step={}x{} cell={}x{}",
-                                    self.inventory.step_x,
-                                    self.inventory.step_y,
-                                    self.inventory.cell_width,
-                                    self.inventory.cell_height
-                                ));
+                                    .floor() as i32;
+                                if step_x < 8 || step_y < 8 {
+                                    self.status = "Выбранная область слишком мала для заданного числа строк и столбцов.".into();
+                                } else {
+                                    self.inventory.origin_x = x1;
+                                    self.inventory.origin_y = y1;
+                                    self.inventory.step_x = step_x;
+                                    self.inventory.step_y = step_y;
+                                    self.inventory.cell_width =
+                                        ((f64::from(step_x) * 0.9).floor() as i32)
+                                            .clamp(8, step_x);
+                                    self.inventory.cell_height =
+                                        ((f64::from(step_y) * 0.9).floor() as i32)
+                                            .clamp(8, step_y);
+                                    self.inventory_grid_region = Region {
+                                        x: x1,
+                                        y: y1,
+                                        width,
+                                        height,
+                                    };
+                                    self.select_inventory_region = false;
+                                    self.mode = Mode::Inventory;
+                                    self.status = format!(
+                                        "Сетка инвентаря откалибрована: {}×{}; шаг {}×{} px.",
+                                        self.inventory.columns,
+                                        self.inventory.rows,
+                                        self.inventory.step_x,
+                                        self.inventory.step_y
+                                    );
+                                    self.log(format!(
+                                        "[ui] inventory grid ROI=({x1},{y1},{width},{height}) step={}x{} cell={}x{}",
+                                        self.inventory.step_x,
+                                        self.inventory.step_y,
+                                        self.inventory.cell_width,
+                                        self.inventory.cell_height
+                                    ));
+                                }
                             } else if self.select_start_region {
                                 self.enchant.start_button_region = Region {
                                     x: x1,
