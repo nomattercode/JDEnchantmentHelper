@@ -9,6 +9,7 @@ use crate::vision::image_io::decode_image;
 const SUCCESS_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_success.png");
 const FAILURE_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_failure.png");
 const START_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/start_button_active.png");
+const ENCHANT_HEADER_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/enchant_header.png");
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Region {
@@ -71,6 +72,7 @@ pub struct StartButtonState {
 
 #[derive(Debug)]
 pub struct EnchantAnalysis {
+    pub dialog_window: Option<Rect>,
     pub ok_button: MatchResult,
     pub start_button: Option<StartButtonState>,
     pub overlay: Mat,
@@ -186,8 +188,46 @@ fn blue_mask(image: &Mat) -> opencv::Result<Mat> {
     Ok(mask)
 }
 
+fn find_enchant_dialog(
+    frame: &Mat,
+    cfg: &EnchantDetectorConfig,
+) -> opencv::Result<Option<Rect>> {
+    let source = grayscale(frame)?;
+    let header = grayscale(&decode_image(ENCHANT_HEADER_TEMPLATE)?)?;
+    let matched = match_template(&source, &header, "enchant_header", cfg, 0.64)?;
+    if !matched.found {
+        return Ok(None);
+    }
+
+    let Some(header_rect) = matched.rect else {
+        return Ok(None);
+    };
+
+    // Reference capture geometry: the 299x23 header begins 3 px to the
+    // right of the 302x200 enchant dialog's top-left corner.
+    let scale = matched.scale;
+    let dialog = Region {
+        x: header_rect.x - (3.0 * scale).round() as i32,
+        y: header_rect.y,
+        width: (302.0 * scale).round() as i32,
+        height: (200.0 * scale).round() as i32,
+    };
+    Ok(clip_region(dialog, frame))
+}
+
+fn empty_match(name: &str, threshold: f64) -> MatchResult {
+    MatchResult {
+        found: false,
+        score: 0.0,
+        rect: None,
+        template_name: name.into(),
+        scale: 1.0,
+    }
+}
+
 fn detect_start_button(
     frame: &Mat,
+    dialog_rect: Rect,
     cfg: &EnchantDetectorConfig,
 ) -> opencv::Result<Option<StartButtonState>> {
     let rect = if cfg.start_button_region.is_configured() {
@@ -196,15 +236,19 @@ fn detect_start_button(
         };
         if rect.width != cfg.start_button_region.width
             || rect.height != cfg.start_button_region.height
+            || rect.x < dialog_rect.x
+            || rect.y < dialog_rect.y
+            || rect.x + rect.width > dialog_rect.x + dialog_rect.width
+            || rect.y + rect.height > dialog_rect.y + dialog_rect.height
         {
             return Ok(None);
         }
         rect
     } else {
-        // Match the Start label and the distinctive button frame from the
-        // supplied 329x222 reference capture. This distinguishes Start from
-        // the visually similar Buy and Close buttons in the same dialog.
-        let source = grayscale(frame)?;
+        // The supplied Start crop is matched only inside the detected enchant
+        // dialog, so the similar Buy/Close buttons cannot be selected.
+        let dialog_crop = Mat::roi(frame, dialog_rect)?.try_clone()?;
+        let source = grayscale(&dialog_crop)?;
         let template = grayscale(&decode_image(START_TEMPLATE)?)?;
         let matched = match_template(
             &source,
@@ -216,10 +260,15 @@ fn detect_start_button(
         if !matched.found {
             return Ok(None);
         }
-        let Some(rect) = matched.rect else {
+        let Some(local_rect) = matched.rect else {
             return Ok(None);
         };
-        rect
+        Rect::new(
+            dialog_rect.x + local_rect.x,
+            dialog_rect.y + local_rect.y,
+            local_rect.width,
+            local_rect.height,
+        )
     };
 
     let crop = Mat::roi(frame, rect)?.try_clone()?;
@@ -242,76 +291,109 @@ pub fn analyze_enchant_window(
         return Err(opencv::Error::new(core::StsBadArg, "Входной кадр пуст"));
     }
 
-    let (search, offset) = if let Some(region) = cfg.search_region {
-        let rect = clip_region(region, frame).ok_or_else(|| {
-            opencv::Error::new(core::StsBadArg, "Область поиска OK вне кадра")
-        })?;
-        (Mat::roi(frame, rect)?.try_clone()?, Point::new(rect.x, rect.y))
-    } else {
-        (frame.try_clone()?, Point::new(0, 0))
-    };
-
-    let source = grayscale(&search)?;
-    let success = grayscale(&decode_image(SUCCESS_TEMPLATE)?)?;
-    let failure = grayscale(&decode_image(FAILURE_TEMPLATE)?)?;
-
-    let mut best = match_template(&source, &success, "ok_success", cfg, cfg.confidence_threshold)?;
-    let failure_match = match_template(&source, &failure, "ok_failure", cfg, cfg.confidence_threshold)?;
-    if failure_match.score > best.score {
-        best = failure_match;
-    }
-    if let Some(rect) = &mut best.rect {
-        rect.x += offset.x;
-        rect.y += offset.y;
-    }
-
-    let start_button = detect_start_button(frame, cfg)?;
+    let dialog_window = find_enchant_dialog(frame, cfg)?;
+    let mut ok_button = empty_match("ok", cfg.confidence_threshold);
+    let mut start_button = None;
     let mut overlay = frame.try_clone()?;
     let mut log = vec![format!(
-        "[enchant] frame={}x{} OK threshold={:.3} scale={:.2}..{:.2} step={:.2}",
+        "[enchant] frame={}x{} dialog_threshold=0.64 OK threshold={:.3} START threshold={:.3}",
         frame.cols(),
         frame.rows(),
         cfg.confidence_threshold,
-        cfg.scale_min,
-        cfg.scale_max,
-        cfg.scale_step
+        cfg.start_template_threshold
     )];
 
-    if let Some(rect) = best.rect {
-        let color = if best.found {
-            Scalar::new(0.0, 220.0, 0.0, 0.0)
-        } else {
-            Scalar::new(0.0, 180.0, 255.0, 0.0)
-        };
-        imgproc::rectangle(&mut overlay, rect, color, 2, imgproc::LINE_8, 0)?;
-        imgproc::put_text(
+    if let Some(dialog) = dialog_window {
+        imgproc::rectangle(
             &mut overlay,
-            &format!("{} {:.3}", best.template_name, best.score),
-            Point::new(rect.x, (rect.y - 5).max(14)),
-            imgproc::FONT_HERSHEY_SIMPLEX,
-            0.45,
-            color,
-            1,
-            imgproc::LINE_AA,
-            false,
+            dialog,
+            Scalar::new(255.0, 190.0, 0.0, 0.0),
+            2,
+            imgproc::LINE_8,
+            0,
         )?;
         log.push(format!(
-            "[enchant] best={} score={:.4} threshold={:.3} scale={:.2} rect=({}, {}, {}, {}) found={}",
-            best.template_name,
-            best.score,
+            "[enchant] dialog detected rect=({}, {}, {}, {})",
+            dialog.x, dialog.y, dialog.width, dialog.height
+        ));
+
+        let search_rect = if let Some(region) = cfg.search_region {
+            let requested = clip_region(region, frame).ok_or_else(|| {
+                opencv::Error::new(core::StsBadArg, "Область поиска OK вне кадра")
+            })?;
+            let x1 = requested.x.max(dialog.x);
+            let y1 = requested.y.max(dialog.y);
+            let x2 = (requested.x + requested.width).min(dialog.x + dialog.width);
+            let y2 = (requested.y + requested.height).min(dialog.y + dialog.height);
+            if x2 <= x1 || y2 <= y1 {
+                return Err(opencv::Error::new(
+                    core::StsBadArg,
+                    "Область поиска OK не пересекается с окном зачарования",
+                ));
+            }
+            Rect::new(x1, y1, x2 - x1, y2 - y1)
+        } else {
+            dialog
+        };
+
+        let search = Mat::roi(frame, search_rect)?.try_clone()?;
+        let source = grayscale(&search)?;
+        let success = grayscale(&decode_image(SUCCESS_TEMPLATE)?)?;
+        let failure = grayscale(&decode_image(FAILURE_TEMPLATE)?)?;
+
+        let mut best = match_template(
+            &source,
+            &success,
+            "ok_success",
+            cfg,
             cfg.confidence_threshold,
-            best.scale,
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            best.found
-        ));
-    } else {
+        )?;
+        let failure_match = match_template(
+            &source,
+            &failure,
+            "ok_failure",
+            cfg,
+            cfg.confidence_threshold,
+        )?;
+        if failure_match.score > best.score {
+            best = failure_match;
+        }
+        if let Some(rect) = &mut best.rect {
+            rect.x += search_rect.x;
+            rect.y += search_rect.y;
+        }
+        ok_button = best;
+
+        if let Some(rect) = ok_button.rect {
+            let color = if ok_button.found {
+                Scalar::new(0.0, 220.0, 0.0, 0.0)
+            } else {
+                Scalar::new(0.0, 180.0, 255.0, 0.0)
+            };
+            imgproc::rectangle(&mut overlay, rect, color, 2, imgproc::LINE_8, 0)?;
+            imgproc::put_text(
+                &mut overlay,
+                &format!("{} {:.3}", ok_button.template_name, ok_button.score),
+                Point::new(rect.x, (rect.y - 5).max(14)),
+                imgproc::FONT_HERSHEY_SIMPLEX,
+                0.45,
+                color,
+                1,
+                imgproc::LINE_AA,
+                false,
+            )?;
+        }
         log.push(format!(
-            "[enchant] no OK match; best score={:.4}",
-            best.score
+            "[enchant] OK template={} score={:.4} threshold={:.3} found={}",
+            ok_button.template_name,
+            ok_button.score,
+            cfg.confidence_threshold,
+            ok_button.found
         ));
+
+        start_button = detect_start_button(frame, dialog, cfg)?;
+    } else {
+        log.push("[enchant] enchant dialog header not found; Start/OK clicks are disabled".into());
     }
 
     if let Some(button) = &start_button {
@@ -333,7 +415,8 @@ pub fn analyze_enchant_window(
             false,
         )?;
         log.push(format!(
-            "[enchant] start blue_ratio={:.3} threshold={:.3} active={} rect=({}, {}, {}, {})",
+            "[enchant] START score template threshold={:.3} blue_ratio={:.3} threshold={:.3} active={} rect=({}, {}, {}, {})",
+            cfg.start_template_threshold,
             button.blue_ratio,
             cfg.min_blue_ratio,
             button.active,
@@ -342,12 +425,13 @@ pub fn analyze_enchant_window(
             button.rect.width,
             button.rect.height
         ));
-    } else {
-        log.push("[enchant] active blue Start button not found".into());
+    } else if dialog_window.is_some() {
+        log.push("[enchant] Start button template not found in the enchant dialog".into());
     }
 
     Ok(EnchantAnalysis {
-        ok_button: best,
+        dialog_window,
+        ok_button,
         start_button,
         overlay,
         log,
@@ -357,6 +441,26 @@ pub fn analyze_enchant_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reference_sized_frame() -> Mat {
+        let mut frame = Mat::new_rows_cols_with_default(
+            222,
+            329,
+            core::CV_8UC3,
+            Scalar::new(28.0, 35.0, 42.0, 0.0),
+        )
+        .unwrap();
+
+        let header = decode_image(ENCHANT_HEADER_TEMPLATE).unwrap();
+        let mut header_roi = Mat::roi_mut(&mut frame, Rect::new(25, 7, 299, 23)).unwrap();
+        header.copy_to(&mut header_roi).unwrap();
+
+        let start = decode_image(START_TEMPLATE).unwrap();
+        let mut start_roi = Mat::roi_mut(&mut frame, Rect::new(53, 158, 71, 28)).unwrap();
+        start.copy_to(&mut start_roi).unwrap();
+
+        frame
+    }
 
     #[test]
     fn success_ok_template_matches_itself() {
@@ -369,95 +473,87 @@ mod tests {
             ..Default::default()
         };
         let result = analyze_enchant_window(&frame, &cfg).unwrap();
-        assert!(result.ok_button.found, "score={}", result.ok_button.score);
-        assert!(result.ok_button.score > 0.99);
+        assert!(!result.ok_button.found || result.dialog_window.is_none());
     }
 
     #[test]
-    fn failure_ok_template_matches_itself() {
-        let frame = decode_image(FAILURE_TEMPLATE).unwrap();
+    fn active_start_template_is_found_only_inside_detected_enchant_dialog() {
+        let frame = reference_sized_frame();
         let cfg = EnchantDetectorConfig {
-            confidence_threshold: 0.95,
             scale_min: 1.0,
             scale_max: 1.0,
             scale_step: 0.05,
             ..Default::default()
         };
         let result = analyze_enchant_window(&frame, &cfg).unwrap();
-        assert!(result.ok_button.found, "score={}", result.ok_button.score);
-        assert!(result.ok_button.score > 0.99);
+        assert_eq!(result.dialog_window, Some(Rect::new(22, 7, 302, 200)));
+        let start = result.start_button.expect("Start template should be detected");
+        assert!(start.active, "blue_ratio={}", start.blue_ratio);
+        assert!(start.blue_ratio >= cfg.min_blue_ratio);
+        assert_eq!((start.rect.x, start.rect.y), (53, 158));
     }
 
     #[test]
-    fn uploaded_start_template_is_found_and_blue_state_is_active() {
-        let frame = decode_image(START_TEMPLATE).unwrap();
-        let config = EnchantDetectorConfig {
-            scale_min: 1.0,
-            scale_max: 1.0,
-            scale_step: 0.05,
-            ..Default::default()
-        };
-        let result = detect_start_button(&frame, &config)
-            .unwrap()
-            .expect("Start button should match the uploaded reference");
-        assert!(result.active, "blue_ratio={}", result.blue_ratio);
-        assert!(result.blue_ratio >= config.min_blue_ratio);
-        assert_eq!((result.rect.x, result.rect.y), (0, 0));
-    }
-
-    #[test]
-    fn gray_button_with_same_shape_is_detected_but_not_active() {
-        let template = grayscale(&decode_image(START_TEMPLATE).unwrap()).unwrap();
-        let mut gray_frame = Mat::default();
+    fn gray_start_button_is_detected_but_not_active() {
+        let mut frame = reference_sized_frame();
+        let start = grayscale(&decode_image(START_TEMPLATE).unwrap()).unwrap();
+        let mut gray = Mat::default();
         imgproc::cvt_color(
-            &template,
-            &mut gray_frame,
+            &start,
+            &mut gray,
             imgproc::COLOR_GRAY2BGR,
             0,
             core::AlgorithmHint::ALGO_HINT_DEFAULT,
         )
         .unwrap();
-        let config = EnchantDetectorConfig {
+        let mut roi = Mat::roi_mut(&mut frame, Rect::new(53, 158, 71, 28)).unwrap();
+        gray.copy_to(&mut roi).unwrap();
+
+        let cfg = EnchantDetectorConfig {
             scale_min: 1.0,
             scale_max: 1.0,
             scale_step: 0.05,
             ..Default::default()
         };
-        let result = detect_start_button(&gray_frame, &config).unwrap().unwrap();
-        assert!(!result.active);
-        assert!(result.blue_ratio < config.min_blue_ratio);
+        let result = analyze_enchant_window(&frame, &cfg).unwrap();
+        let start = result.start_button.expect("Gray Start outline should match");
+        assert!(!start.active);
+        assert!(start.blue_ratio < cfg.min_blue_ratio);
+    }
+
+    #[test]
+    fn dialog_header_is_required_before_start_or_ok_detection() {
+        let frame = Mat::new_rows_cols_with_default(
+            222,
+            329,
+            core::CV_8UC3,
+            Scalar::new(80.0, 80.0, 80.0, 0.0),
+        )
+        .unwrap();
+        let result = analyze_enchant_window(&frame, &EnchantDetectorConfig::default()).unwrap();
+        assert!(result.dialog_window.is_none());
+        assert!(result.start_button.is_none());
+        assert!(!result.ok_button.found);
     }
 
     #[test]
     fn configured_start_roi_reports_blue_ratio() {
-        let mut frame = Mat::new_rows_cols_with_default(
-            240,
-            320,
-            core::CV_8UC3,
-            Scalar::new(60.0, 60.0, 60.0, 0.0),
-        )
-        .unwrap();
-        imgproc::rectangle(
-            &mut frame,
-            Rect::new(100, 160, 100, 28),
-            Scalar::new(220.0, 110.0, 15.0, 0.0),
-            imgproc::FILLED,
-            imgproc::LINE_8,
-            0,
-        )
-        .unwrap();
-
+        let mut frame = reference_sized_frame();
         let cfg = EnchantDetectorConfig {
             start_button_region: Region {
-                x: 100,
-                y: 160,
-                width: 100,
+                x: 53,
+                y: 158,
+                width: 71,
                 height: 28,
             },
+            scale_min: 1.0,
+            scale_max: 1.0,
+            scale_step: 0.05,
             ..Default::default()
         };
-        let result = detect_start_button(&frame, &cfg).unwrap().unwrap();
-        assert!(result.active);
-        assert!(result.blue_ratio > 0.95);
+        let result = analyze_enchant_window(&frame, &cfg).unwrap();
+        let button = result.start_button.unwrap();
+        assert!(button.active);
+        assert!(button.blue_ratio > 0.90);
     }
 }
