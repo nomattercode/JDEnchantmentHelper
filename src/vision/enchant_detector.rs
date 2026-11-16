@@ -194,7 +194,7 @@ fn detect_start_button(
             return Ok(None);
         }
 
-        let crop = Mat::roi(frame, rect)?;
+        let crop = Mat::roi(frame, rect)?.try_clone()?;
         let mask = blue_mask(&crop)?;
         let ratio = f64::from(core::count_non_zero(&mask)?)
             / f64::from((rect.width * rect.height).max(1));
