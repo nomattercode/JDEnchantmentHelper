@@ -1563,7 +1563,7 @@ impl EnchantmentHelperApp {
                         response.rect.top()
                             + ((region.y + region.height) as f32 / raw_size.y) * response.rect.height(),
                     );
-                    let stroke = egui::Stroke::new(2.0, color);
+                    let stroke = egui::Stroke::new(2.0_f32, color);
                     let painter = ui.painter();
                     painter.line_segment([min, egui::pos2(max.x, min.y)], stroke);
                     painter.line_segment([egui::pos2(max.x, min.y), max], stroke);

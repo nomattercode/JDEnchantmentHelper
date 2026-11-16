@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     fn configured_start_roi_reports_blue_ratio() {
-        let mut frame = reference_sized_frame();
+        let frame = reference_sized_frame();
         let cfg = EnchantDetectorConfig {
             start_button_region: Region {
                 x: 53,

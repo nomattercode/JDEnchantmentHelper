@@ -20,7 +20,7 @@ use windows_sys::Win32::{
         WindowsAndMessaging::{
             EnumWindows, GetForegroundWindow, GetWindowRect, GetWindowTextLengthW,
             GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-            SetForegroundWindow, SetCursorPos, ShowWindow, SW_RESTORE,
+            SetForegroundWindow, SetCursorPos,
         },
     },
 };
