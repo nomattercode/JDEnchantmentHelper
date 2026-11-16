@@ -95,16 +95,48 @@ fn inventory_page_fingerprint(
     .map_err(|error| format!("Не удалось прочитать страницу инвентаря: {error}"))?
     .try_clone()
     .map_err(|error| format!("Не удалось подготовить снимок страницы: {error}"))?;
-    let bytes = roi
-        .data_bytes()
-        .map_err(|error| format!("Не удалось получить пиксели страницы: {error}"))?;
 
-    let mut hash = 0xcbf29ce484222325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
+    // A compact average-hash is less sensitive to small animated highlights,
+    // cursor-adjacent changes and capture noise than hashing every raw pixel.
+    let mut gray = opencv::core::Mat::default();
+    opencv::imgproc::cvt_color(
+        &roi,
+        &mut gray,
+        opencv::imgproc::COLOR_BGR2GRAY,
+        0,
+        opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
+    )
+    .map_err(|error| format!("Не удалось преобразовать страницу в оттенки серого: {error}"))?;
+
+    let mut thumbnail = opencv::core::Mat::default();
+    opencv::imgproc::resize(
+        &gray,
+        &mut thumbnail,
+        opencv::core::Size::new(8, 8),
+        0.0,
+        0.0,
+        opencv::imgproc::INTER_AREA,
+    )
+    .map_err(|error| format!("Не удалось уменьшить снимок страницы: {error}"))?;
+    let pixels = thumbnail
+        .data_bytes()
+        .map_err(|error| format!("Не удалось получить пиксели снимка страницы: {error}"))?;
+    if pixels.len() != 64 {
+        return Err("Не удалось получить корректный отпечаток страницы инвентаря.".into());
+    }
+
+    let average = pixels.iter().map(|value| u64::from(*value)).sum::<u64>() / 64;
+    let mut hash = 0_u64;
+    for (index, value) in pixels.iter().enumerate() {
+        if u64::from(*value) >= average {
+            hash |= 1_u64 << index;
+        }
     }
     Ok(hash)
+}
+
+fn same_inventory_page(left: u64, right: u64) -> bool {
+    (left ^ right).count_ones() <= 6
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +149,7 @@ enum AutomationPhase {
     ReconcileInventory,
     CheckNextPage,
     ReturnToFirstPage,
+    CheckPreviousPage,
 }
 
 pub struct EnchantmentHelperApp {
@@ -763,7 +796,7 @@ impl EnchantmentHelperApp {
                     }
                 };
 
-                if self.current_page_fingerprint == Some(fingerprint) {
+                if self.current_page_fingerprint.is_some_and(|previous| same_inventory_page(previous, fingerprint)) {
                     if self.unchanged_page_checks == 0 {
                         self.unchanged_page_checks = 1;
                         self.next_automation_poll = Instant::now() + Duration::from_millis(500);
@@ -798,24 +831,67 @@ impl EnchantmentHelperApp {
                 return;
             }
             Some(AutomationPhase::ReturnToFirstPage) => {
-                if self.return_scroll_remaining > 0 {
-                    let x = self.inventory_grid_region.x + self.inventory_grid_region.width / 2;
-                    let y = self.inventory_grid_region.y + self.inventory_grid_region.height / 2;
-                    if let Err(error) = scroll_window(handle, x, y, 120) {
-                        self.stop_automation(&format!("Не удалось вернуться к первой странице: {error}"));
+                if self.return_scroll_remaining == 0 {
+                    self.start_next_pass(handle, &frame);
+                    return;
+                }
+
+                let x = self.inventory_grid_region.x + self.inventory_grid_region.width / 2;
+                let y = self.inventory_grid_region.y + self.inventory_grid_region.height / 2;
+                if let Err(error) = scroll_window(handle, x, y, 120) {
+                    self.stop_automation(&format!("Не удалось вернуться к предыдущей странице: {error}"));
+                    return;
+                }
+                self.unchanged_page_checks = 0;
+                self.automation_phase = Some(AutomationPhase::CheckPreviousPage);
+                self.phase_started = Instant::now();
+                self.next_automation_poll = Instant::now() + Duration::from_millis(750);
+                self.status = format!(
+                    "Возврат на первую страницу. Осталось переходов: {}.",
+                    self.return_scroll_remaining
+                );
+                return;
+            }
+            Some(AutomationPhase::CheckPreviousPage) => {
+                let fingerprint = match inventory_page_fingerprint(&frame, self.inventory_grid_region) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.stop_automation(&format!("Не удалось проверить предыдущую страницу: {error}"));
                         return;
                     }
-                    self.return_scroll_remaining = self.return_scroll_remaining.saturating_sub(1);
-                    self.page_index = self.page_index.saturating_sub(1);
-                    self.next_automation_poll = Instant::now() + Duration::from_millis(650);
-                    self.status = format!(
-                        "Возврат к первой странице. Осталось прокруток вверх: {}.",
-                        self.return_scroll_remaining
+                };
+
+                let unchanged = self
+                    .current_page_fingerprint
+                    .is_some_and(|previous| same_inventory_page(previous, fingerprint));
+                if unchanged {
+                    if self.unchanged_page_checks == 0 {
+                        self.unchanged_page_checks = 1;
+                        self.next_automation_poll = Instant::now() + Duration::from_millis(500);
+                        return;
+                    }
+                    self.stop_automation(
+                        "Колесо мыши не переключило страницу вверх. Следующий проход не запущен.",
                     );
                     return;
                 }
 
-                self.start_next_pass(handle, &frame);
+                self.unchanged_page_checks = 0;
+                self.current_page_fingerprint = Some(fingerprint);
+                self.page_index = self.page_index.saturating_sub(1);
+                self.return_scroll_remaining = self.return_scroll_remaining.saturating_sub(1);
+                self.log(format!(
+                    "Подтверждён переход вверх. Текущая страница: {}.",
+                    self.page_index + 1
+                ));
+
+                if self.return_scroll_remaining == 0 {
+                    self.start_next_pass(handle, &frame);
+                } else {
+                    self.automation_phase = Some(AutomationPhase::ReturnToFirstPage);
+                    self.phase_started = Instant::now();
+                    self.next_automation_poll = Instant::now() + Duration::from_millis(300);
+                }
                 return;
             }
             Some(AutomationPhase::WaitingForStart)
@@ -829,7 +905,8 @@ impl EnchantmentHelperApp {
             Some(AutomationPhase::WaitingForStart) => Duration::from_secs(45),
             Some(AutomationPhase::WaitingForOk) => Duration::from_secs(180),
             Some(AutomationPhase::CheckNextPage) => Duration::from_secs(8),
-            Some(AutomationPhase::ReturnToFirstPage) => Duration::from_secs(30),
+            Some(AutomationPhase::CheckPreviousPage) => Duration::from_secs(8),
+            Some(AutomationPhase::ReturnToFirstPage) => Duration::from_secs(8),
             _ => Duration::from_secs(30),
         };
         if now.duration_since(self.phase_started) > timeout {
@@ -837,6 +914,7 @@ impl EnchantmentHelperApp {
                 Some(AutomationPhase::WaitingForStart) => "Не дождался активации кнопки «Начать».",
                 Some(AutomationPhase::WaitingForOk) => "Не дождался появления кнопки OK.",
                 Some(AutomationPhase::CheckNextPage) => "Не удалось определить результат прокрутки инвентаря.",
+                Some(AutomationPhase::CheckPreviousPage) => "Не удалось подтвердить переход на предыдущую страницу.",
                 Some(AutomationPhase::ReturnToFirstPage) => "Не удалось вернуться к первой странице инвентаря.",
                 _ => "Истекло время ожидания этапа автоматизации.",
             };
@@ -1377,5 +1455,14 @@ mod tests {
         let different = super::Region { x: 80, y: 20, width: 82, height: 42 };
         assert!(super::same_detection_region(first, jittered));
         assert!(!super::same_detection_region(first, different));
+    }
+
+    #[test]
+    fn inventory_page_fingerprint_ignores_small_visual_jitter() {
+        let first = 0b1010_1010_u64;
+        let jittered = 0b1010_1000_u64;
+        let other_page = 0b0101_0101_u64;
+        assert!(super::same_inventory_page(first, jittered));
+        assert!(!super::same_inventory_page(first, other_page));
     }
 }
