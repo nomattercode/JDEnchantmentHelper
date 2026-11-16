@@ -1474,7 +1474,6 @@ impl EnchantmentHelperApp {
 
     fn game_window_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
-            ui.label("Игровое окно");
             let selection_enabled = self.automation_phase.is_none();
             let previous_window = self.selected_window;
             ui.add_enabled_ui(selection_enabled, |ui| {
@@ -1559,15 +1558,15 @@ impl EnchantmentHelperApp {
             ui.add_enabled_ui(
                 self.automation_phase.is_none(),
                 |ui| {
-                    if ui.button("Снять кадр и настроить сетку").clicked() {
+                    if ui.button("Снять кадр и выделить сетку").clicked() {
                         self.capture_calibration_snapshot(ctx);
                     }
                 },
             );
             if self.calibration_preview.is_some() {
-                ui.label("Перетащите мышь по всей сетке инвентаря.");
+                ui.label("Выделите мышью всю сетку — от первой до последней ячейки.");
             } else if self.inventory_grid_region.is_configured() {
-                ui.label("Сетка настроена. Превью отключено до следующей перенастройки.");
+                ui.label("Сетка настроена. Повторная настройка не требуется.");
             }
         });
 
@@ -1673,130 +1672,246 @@ impl eframe::App for EnchantmentHelperApp {
 
         egui::TopBottomPanel::top("header").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Помощник зачарования Jade Dynasty");
+                ui.heading("Jade Dynasty · Зачарование");
                 ui.separator();
-                let state = match self.run_state {
-                    RunState::Running => "РАБОТАЕТ",
-                    RunState::Paused => "ПАУЗА",
-                    RunState::Stopped => "ОСТАНОВЛЕНО",
-                    RunState::Idle => "ГОТОВО",
+                let (state, color) = match self.run_state {
+                    RunState::Running => ("В РАБОТЕ", egui::Color32::from_rgb(70, 190, 125)),
+                    RunState::Paused => ("ПАУЗА", egui::Color32::from_rgb(225, 175, 65)),
+                    RunState::Stopped => ("ОСТАНОВЛЕНО", egui::Color32::from_rgb(180, 115, 115)),
+                    RunState::Idle => ("ГОТОВО К ЗАПУСКУ", ui.visuals().weak_text_color()),
                 };
-                ui.label(state);
-                ui.separator();
-                ui.colored_label(egui::Color32::LIGHT_RED, "F12 — АВАРИЙНЫЙ СТОП");
+                ui.label(
+                    egui::RichText::new(state)
+                        .strong()
+                        .color(color),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_RED,
+                        egui::RichText::new("F12 · АВАРИЙНЫЙ СТОП").strong(),
+                    );
+                });
             });
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.group(|ui| self.game_window_ui(ui, ctx));
+                ui.columns(2, |columns| {
+                    columns[0].vertical(|ui| {
+                        ui.group(|ui| {
+                            ui.label(egui::RichText::new("1. ИГРОВОЕ ОКНО").strong());
+                            ui.add_space(4.0);
+                            self.game_window_ui(ui, ctx);
+                        });
 
-                ui.add_space(8.0);
-                ui.group(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Полных проходов").strong());
-                        if ui.add_enabled(
-                            self.run_state != RunState::Running
-                                && self.run_state != RunState::Paused
-                                && self.passes_total > 1,
-                            egui::Button::new("◀"),
-                        ).clicked() {
-                            self.passes_total = self.passes_total.saturating_sub(1).max(1);
-                        }
-                        ui.label(
-                            egui::RichText::new(self.passes_total.to_string())
-                                .size(22.0)
-                                .strong()
-                                .monospace(),
-                        );
-                        if ui.add_enabled(
-                            self.run_state != RunState::Running
-                                && self.run_state != RunState::Paused
-                                && self.passes_total < MAX_PASSES,
-                            egui::Button::new("▶"),
-                        ).clicked() {
-                            self.passes_total = self.passes_total.saturating_add(1).min(MAX_PASSES);
-                        }
+                        ui.add_space(8.0);
+                        ui.group(|ui| {
+                            ui.label(egui::RichText::new("2. ИНВЕНТАРЬ").strong());
+                            ui.add_space(4.0);
+
+                            let grid_ready = self.inventory_grid_region.is_configured();
+                            let selected = self.selected_window_data().is_some();
+
+                            if !selected {
+                                ui.label("Сначала выберите окно Jade Dynasty выше.");
+                            } else if !grid_ready {
+                                ui.label("Снимите кадр игры и выделите всю сетку инвентаря.");
+                            } else {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("Сетка настроена")
+                                            .strong()
+                                            .color(egui::Color32::from_rgb(70, 190, 125)),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.small(format!(
+                                                "{} × {} · {} ячеек",
+                                                self.inventory.columns,
+                                                self.inventory.rows,
+                                                u16::from(self.inventory.columns)
+                                                    * u16::from(self.inventory.rows)
+                                            ));
+                                        },
+                                    );
+                                });
+                            }
+
+                            egui::CollapsingHeader::new("Параметры сетки и распознавания")
+                                .default_open(false)
+                                .show(ui, |ui| {
+                                    ui.add_enabled_ui(self.automation_phase.is_none(), |ui| {
+                                        self.inventory_settings_ui(ui);
+                                    });
+                                    if self.automation_phase.is_some() {
+                                        ui.small("Параметры заблокированы на время серии.");
+                                    }
+                                });
+                        });
+
+                        ui.add_space(8.0);
+                        ui.group(|ui| {
+                            ui.label(egui::RichText::new("ПЕРЕД ЗАПУСКОМ").strong());
+                            ui.small("Откройте первую страницу инвентаря, убедитесь, что амулет на своём месте, и не перемещайте предметы вручную во время серии.");
+                        });
                     });
 
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.add_enabled(
-                            self.run_state != RunState::Running
+                    columns[1].vertical(|ui| {
+                        ui.group(|ui| {
+                            ui.label(egui::RichText::new("3. ПАРАМЕТРЫ СЕРИИ").strong());
+                            ui.add_space(4.0);
+
+                            ui.label("Полных проходов по всем страницам");
+                            ui.horizontal(|ui| {
+                                let can_edit = self.automation_phase.is_none()
+                                    && self.run_state != RunState::Paused
+                                    && self.run_state != RunState::Running;
+                                if ui.add_enabled(
+                                    can_edit && self.passes_total > 1,
+                                    egui::Button::new("−").min_size(egui::vec2(38.0, 34.0)),
+                                ).clicked() {
+                                    self.passes_total = self.passes_total.saturating_sub(1).max(1);
+                                }
+                                ui.label(
+                                    egui::RichText::new(self.passes_total.to_string())
+                                        .size(26.0)
+                                        .strong()
+                                        .monospace(),
+                                );
+                                if ui.add_enabled(
+                                    can_edit && self.passes_total < MAX_PASSES,
+                                    egui::Button::new("+").min_size(egui::vec2(38.0, 34.0)),
+                                ).clicked() {
+                                    self.passes_total = self.passes_total.saturating_add(1).min(MAX_PASSES);
+                                }
+                                ui.small(format!("1–{MAX_PASSES}"));
+                            });
+                            ui.small("Один проход — полный обход всех страниц. Следующие проходы затрагивают только уцелевшие предметы.");
+
+                            ui.add_space(8.0);
+                            let can_start = self.automation_phase.is_none()
+                                && self.run_state != RunState::Running
                                 && self.run_state != RunState::Paused
                                 && self.selected_window.is_some()
-                                && self.inventory_grid_region.is_configured(),
-                            egui::Button::new("Начать"),
-                        ).clicked() {
-                            self.start_automation();
-                        }
-                        if ui.add_enabled(
-                            self.run_state == RunState::Running,
-                            egui::Button::new("Пауза"),
-                        ).clicked() {
-                            self.run_state = RunState::Paused;
-                            self.paused_at = Some(Instant::now());
-                            self.status = "Пауза. F12 продолжает работать.".into();
-                            self.log("Автоматизация приостановлена.");
-                        }
-                        if ui.add_enabled(
-                            self.run_state == RunState::Paused,
-                            egui::Button::new("Продолжить"),
-                        ).clicked() {
-                            if let Some(paused_at) = self.paused_at.take() {
-                                self.phase_started = self.phase_started + paused_at.elapsed();
+                                && self.inventory_grid_region.is_configured();
+                            if ui.add_enabled(
+                                can_start,
+                                egui::Button::new(
+                                    egui::RichText::new("▶  Начать зачарование")
+                                        .size(17.0)
+                                        .strong(),
+                                )
+                                .min_size(egui::vec2(ui.available_width(), 46.0)),
+                            ).clicked() {
+                                self.start_automation();
                             }
-                            self.run_state = RunState::Running;
-                            self.next_automation_poll = Instant::now();
-                            self.status = "Автоматизация продолжена.".into();
-                            self.log("Автоматизация продолжена.");
-                        }
-                        if ui.add_enabled(
-                            self.automation_phase.is_some()
-                                || self.run_state == RunState::Paused,
-                            egui::Button::new("Стоп"),
-                        ).clicked() {
-                            self.stop_automation("Автоматизация остановлена пользователем.");
-                        }
-                    });
 
-                    ui.horizontal(|ui| {
-                        ui.label(format!(
-                            "Проход {} из {}",
-                            self.current_pass, self.passes_total
-                        ));
-                        ui.separator();
-                        ui.label(format!("Страница {}", self.page_index + 1));
-                        ui.separator();
-                        ui.label(format!(
-                            "Обработано: {} · уцелело: {}",
-                            self.items_processed_in_pass, self.surviving_items_in_pass
-                        ));
+                            ui.horizontal(|ui| {
+                                if ui.add_enabled(
+                                    self.run_state == RunState::Running,
+                                    egui::Button::new("Пауза").min_size(egui::vec2(88.0, 32.0)),
+                                ).clicked() {
+                                    self.run_state = RunState::Paused;
+                                    self.paused_at = Some(Instant::now());
+                                    self.status = "Пауза. F12 продолжает работать.".into();
+                                    self.log("Автоматизация приостановлена.");
+                                }
+                                if ui.add_enabled(
+                                    self.run_state == RunState::Paused,
+                                    egui::Button::new("Продолжить").min_size(egui::vec2(104.0, 32.0)),
+                                ).clicked() {
+                                    if let Some(paused_at) = self.paused_at.take() {
+                                        self.phase_started = self.phase_started + paused_at.elapsed();
+                                    }
+                                    self.run_state = RunState::Running;
+                                    self.next_automation_poll = Instant::now();
+                                    self.status = "Автоматизация продолжена.".into();
+                                    self.log("Автоматизация продолжена.");
+                                }
+                                if ui.add_enabled(
+                                    self.automation_phase.is_some()
+                                        || self.run_state == RunState::Paused,
+                                    egui::Button::new("Стоп").min_size(egui::vec2(64.0, 32.0)),
+                                ).clicked() {
+                                    self.stop_automation("Автоматизация остановлена пользователем.");
+                                }
+                            });
+                        });
+
+                        ui.add_space(8.0);
+                        ui.group(|ui| {
+                            ui.label(egui::RichText::new("ТЕКУЩЕЕ СОСТОЯНИЕ").strong());
+                            let (state, color) = match self.run_state {
+                                RunState::Running => ("Идёт зачарование", egui::Color32::from_rgb(70, 190, 125)),
+                                RunState::Paused => ("Серия приостановлена", egui::Color32::from_rgb(225, 175, 65)),
+                                RunState::Stopped => ("Серия завершена или остановлена", ui.visuals().text_color()),
+                                RunState::Idle => ("Ожидание запуска", ui.visuals().weak_text_color()),
+                            };
+                            ui.label(egui::RichText::new(state).strong().color(color));
+                            ui.add_space(3.0);
+                            ui.label(&self.status);
+                            ui.small(&self.summary);
+                            ui.separator();
+
+                            egui::Grid::new("run_metrics")
+                                .num_columns(2)
+                                .spacing(egui::vec2(12.0, 6.0))
+                                .show(ui, |ui| {
+                                    ui.label("Проход");
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} / {}",
+                                            self.current_pass, self.passes_total
+                                        ))
+                                        .strong()
+                                        .monospace(),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label("Страница");
+                                    ui.label(
+                                        egui::RichText::new((self.page_index + 1).to_string())
+                                            .strong()
+                                            .monospace(),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label("Обработано");
+                                    ui.label(
+                                        egui::RichText::new(self.items_processed_in_pass.to_string())
+                                            .strong()
+                                            .monospace(),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label("Уцелело");
+                                    ui.label(
+                                        egui::RichText::new(self.surviving_items_in_pass.to_string())
+                                            .strong()
+                                            .monospace(),
+                                    );
+                                    ui.end_row();
+                                });
+                        });
+
+                        ui.add_space(8.0);
+                        ui.group(|ui| {
+                            egui::CollapsingHeader::new(format!("Журнал событий · {}", self.logs.len()))
+                                .default_open(false)
+                                .show(ui, |ui| {
+                                    egui::ScrollArea::vertical()
+                                        .max_height(220.0)
+                                        .stick_to_bottom(true)
+                                        .show(ui, |ui| {
+                                            for line in self.logs.iter().rev().take(120).rev() {
+                                                ui.monospace(line);
+                                            }
+                                        });
+                                });
+                        });
                     });
                 });
-
-                ui.group(|ui| {
-                    ui.label(egui::RichText::new(&self.status).strong());
-                    ui.label(&self.summary);
-                });
-
-                ui.collapsing("Настройки инвентаря", |ui| {
-                    ui.add_enabled_ui(self.automation_phase.is_none(), |ui| {
-                        self.inventory_settings_ui(ui);
-                    });
-                    if self.automation_phase.is_some() {
-                        ui.small("Настройки заблокированы на время серии.");
-                    }
-                });
-
-                ui.heading("Журнал");
-                egui::ScrollArea::vertical()
-                    .max_height(260.0)
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        for line in self.logs.iter().rev().take(120).rev() {
-                            ui.monospace(line);
-                        }
-                    });
             });
         });
 
