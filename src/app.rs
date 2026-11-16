@@ -178,6 +178,8 @@ pub struct EnchantmentHelperApp {
     page_index: usize,
     current_page_fingerprint: Option<u64>,
     unchanged_page_checks: u8,
+    pending_page_fingerprint: Option<u64>,
+    stable_page_change_checks: u8,
     return_scroll_remaining: usize,
 
     run_state: RunState,
@@ -220,6 +222,8 @@ impl Default for EnchantmentHelperApp {
             page_index: 0,
             current_page_fingerprint: None,
             unchanged_page_checks: 0,
+            pending_page_fingerprint: None,
+            stable_page_change_checks: 0,
             return_scroll_remaining: 0,
 
             run_state: RunState::Idle,
@@ -432,6 +436,8 @@ impl EnchantmentHelperApp {
         let y = self.inventory_grid_region.y + self.inventory_grid_region.height / 2;
         scroll_window(handle, x, y, -120)?;
         self.unchanged_page_checks = 0;
+        self.pending_page_fingerprint = None;
+        self.stable_page_change_checks = 0;
         self.automation_phase = Some(AutomationPhase::CheckNextPage);
         self.phase_started = Instant::now();
         self.next_automation_poll = Instant::now() + Duration::from_millis(750);
@@ -558,6 +564,8 @@ impl EnchantmentHelperApp {
         self.page_index = 0;
         self.current_page_fingerprint = None;
         self.unchanged_page_checks = 0;
+        self.pending_page_fingerprint = None;
+        self.stable_page_change_checks = 0;
         self.return_scroll_remaining = 0;
         self.paused_at = None;
         self.reset_detection_streak();
@@ -808,7 +816,14 @@ impl EnchantmentHelperApp {
                     }
                 };
 
+                if now.duration_since(self.phase_started) > Duration::from_secs(10) {
+                    self.stop_automation("Не удалось надёжно определить, переключилась ли страница инвентаря.");
+                    return;
+                }
+
                 if self.current_page_fingerprint.is_some_and(|previous| same_inventory_page(previous, fingerprint)) {
+                    self.pending_page_fingerprint = None;
+                    self.stable_page_change_checks = 0;
                     if self.unchanged_page_checks == 0 {
                         self.unchanged_page_checks = 1;
                         self.next_automation_poll = Instant::now() + Duration::from_millis(500);
@@ -820,6 +835,22 @@ impl EnchantmentHelperApp {
                 }
 
                 self.unchanged_page_checks = 0;
+                let stable_candidate = self
+                    .pending_page_fingerprint
+                    .is_some_and(|previous| same_inventory_page(previous, fingerprint));
+                if stable_candidate {
+                    self.stable_page_change_checks = self.stable_page_change_checks.saturating_add(1);
+                } else {
+                    self.pending_page_fingerprint = Some(fingerprint);
+                    self.stable_page_change_checks = 1;
+                }
+                if self.stable_page_change_checks < 3 {
+                    self.next_automation_poll = Instant::now() + Duration::from_millis(400);
+                    return;
+                }
+
+                self.pending_page_fingerprint = None;
+                self.stable_page_change_checks = 0;
                 self.page_index = self.page_index.saturating_add(1);
                 self.processed_slots_current_page.clear();
                 self.current_item = None;
@@ -855,6 +886,8 @@ impl EnchantmentHelperApp {
                     return;
                 }
                 self.unchanged_page_checks = 0;
+                self.pending_page_fingerprint = None;
+                self.stable_page_change_checks = 0;
                 self.automation_phase = Some(AutomationPhase::CheckPreviousPage);
                 self.phase_started = Instant::now();
                 self.next_automation_poll = Instant::now() + Duration::from_millis(750);
@@ -873,10 +906,17 @@ impl EnchantmentHelperApp {
                     }
                 };
 
+                if now.duration_since(self.phase_started) > Duration::from_secs(10) {
+                    self.stop_automation("Не удалось надёжно подтвердить возврат к первой странице.");
+                    return;
+                }
+
                 let unchanged = self
                     .current_page_fingerprint
                     .is_some_and(|previous| same_inventory_page(previous, fingerprint));
                 if unchanged {
+                    self.pending_page_fingerprint = None;
+                    self.stable_page_change_checks = 0;
                     if self.unchanged_page_checks == 0 {
                         self.unchanged_page_checks = 1;
                         self.next_automation_poll = Instant::now() + Duration::from_millis(500);
@@ -889,6 +929,22 @@ impl EnchantmentHelperApp {
                 }
 
                 self.unchanged_page_checks = 0;
+                let stable_candidate = self
+                    .pending_page_fingerprint
+                    .is_some_and(|previous| same_inventory_page(previous, fingerprint));
+                if stable_candidate {
+                    self.stable_page_change_checks = self.stable_page_change_checks.saturating_add(1);
+                } else {
+                    self.pending_page_fingerprint = Some(fingerprint);
+                    self.stable_page_change_checks = 1;
+                }
+                if self.stable_page_change_checks < 3 {
+                    self.next_automation_poll = Instant::now() + Duration::from_millis(400);
+                    return;
+                }
+
+                self.pending_page_fingerprint = None;
+                self.stable_page_change_checks = 0;
                 self.current_page_fingerprint = Some(fingerprint);
                 self.page_index = self.page_index.saturating_sub(1);
                 self.return_scroll_remaining = self.return_scroll_remaining.saturating_sub(1);
