@@ -557,19 +557,48 @@ impl EnchantmentHelperApp {
                     self.stop_automation("В логической таблице не задана ячейка амулета.");
                     return;
                 };
-                let x = amulet.rect.x + amulet.rect.width / 2;
-                let y = amulet.rect.y + amulet.rect.height / 2;
+                let scan = match scan_inventory(&frame, &self.inventory) {
+                    Ok(scan) => scan,
+                    Err(error) => {
+                        self.stop_automation(&format!("Не удалось перепроверить ячейку амулета: {error}"));
+                        return;
+                    }
+                };
+                let verified = scan
+                    .cells
+                    .iter()
+                    .find(|cell| cell.row == amulet.row && cell.col == amulet.col)
+                    .cloned();
+                let Some(verified) = verified else {
+                    self.stop_automation("Ячейка амулета отсутствует в повторном сканировании.");
+                    return;
+                };
+                if verified.score < self.inventory.threshold || verified.kind == CellKind::OutOfFrame {
+                    let message = format!(
+                        "Амулет не подтверждён перед ПКМ: r{}c{} score={:.3}, threshold={:.3}.",
+                        verified.row + 1,
+                        verified.col + 1,
+                        verified.score,
+                        self.inventory.threshold
+                    );
+                    self.stop_automation(&message);
+                    return;
+                }
+                self.amulet_slot = Some(verified.clone());
+                let x = verified.rect.x + verified.rect.width / 2;
+                let y = verified.rect.y + verified.rect.height / 2;
                 match right_click_window_point(handle, x, y) {
                     Ok(()) => {
                         self.log(format!(
-                            "[automation] right-click amulet at r{}c{} ({x},{y})",
-                            amulet.row + 1,
-                            amulet.col + 1
+                            "[automation] verified and right-clicked amulet r{}c{} score={:.3} at ({x},{y})",
+                            verified.row + 1,
+                            verified.col + 1,
+                            verified.score
                         ));
                         self.automation_phase = Some(AutomationPhase::InsertItem);
                         self.phase_started = Instant::now();
                         self.next_automation_poll = Instant::now() + Duration::from_millis(420);
-                        self.status = "Амулет выбран. Перенос предмета в окно зачарования.".into();
+                        self.status = "Амулет перепроверен и выбран. Перенос предмета в окно зачарования.".into();
                     }
                     Err(error) => {
                         self.stop_automation(&format!("Не удалось выбрать амулет: {error}"));
@@ -582,21 +611,61 @@ impl EnchantmentHelperApp {
                     self.stop_automation("Текущий предмет не задан.");
                     return;
                 };
-                let x = item.rect.x + item.rect.width / 2;
-                let y = item.rect.y + item.rect.height / 2;
+                let scan = match scan_inventory(&frame, &self.inventory) {
+                    Ok(scan) => scan,
+                    Err(error) => {
+                        self.stop_automation(&format!("Не удалось перепроверить ячейку предмета: {error}"));
+                        return;
+                    }
+                };
+                let verified = scan
+                    .cells
+                    .iter()
+                    .find(|cell| cell.row == item.row && cell.col == item.col)
+                    .cloned();
+                let Some(verified) = verified else {
+                    self.stop_automation("Ячейка выбранного предмета отсутствует в повторном сканировании.");
+                    return;
+                };
+
+                if verified.kind != CellKind::Occupied || verified.score < self.inventory.threshold {
+                    self.logical_inventory = scan.cells.clone();
+                    for line in &scan.log {
+                        self.log(line.clone());
+                    }
+                    self.save_debug("inventory_item_missing_before_click.png", &scan.overlay);
+                    self.set_preview(ctx, &scan.overlay);
+                    self.log(format!(
+                        "[automation] skipped r{}c{} before right-click: slot is {:?}, score={:.3}",
+                        item.row + 1,
+                        item.col + 1,
+                        verified.kind,
+                        verified.score
+                    ));
+                    self.automation_phase = Some(AutomationPhase::ReconcileInventory);
+                    self.phase_started = Instant::now();
+                    self.next_automation_poll = Instant::now() + Duration::from_millis(350);
+                    self.status = "Выбранная ячейка стала пустой до клика. Таблица обновляется; предмет будет пропущен.".into();
+                    return;
+                }
+
+                self.logical_inventory = scan.cells.clone();
+                self.current_item = Some(verified.clone());
+                let x = verified.rect.x + verified.rect.width / 2;
+                let y = verified.rect.y + verified.rect.height / 2;
                 match right_click_window_point(handle, x, y) {
                     Ok(()) => {
                         self.log(format!(
-                            "[automation] right-click item r{}c{} score={:.3} at ({x},{y})",
-                            item.row + 1,
-                            item.col + 1,
-                            item.score
+                            "[automation] verified and right-clicked item r{}c{} score={:.3} at ({x},{y})",
+                            verified.row + 1,
+                            verified.col + 1,
+                            verified.score
                         ));
                         self.automation_phase = Some(AutomationPhase::WaitingForStart);
                         self.phase_started = Instant::now();
                         self.consecutive_matches = 0;
                         self.next_automation_poll = Instant::now() + Duration::from_millis(420);
-                        self.status = "Ожидание появления и активации кнопки «Начать».".into();
+                        self.status = "Предмет перепроверен и выбран. Ожидание появления и активации кнопки «Начать».".into();
                     }
                     Err(error) => {
                         self.stop_automation(&format!("Не удалось выбрать предмет: {error}"));
