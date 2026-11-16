@@ -20,7 +20,7 @@ Windows desktop application for scanning Jade Dynasty inventory and running a gu
 - Rescan the inventory. Replace the logical table with the fresh scan and compare occupied slots. Empty slots are removed from the available queue; a still-occupied item is marked attempted and is not clicked again.
 - Repeat with the next unattempted occupied item until the selected pass count is reached or no eligible items remain.
 
-The logical inventory table in the UI shows the amulet, available items, attempted items and empty/out-of-frame cells. Debug images and score maps are written to `diagnostics\`.
+The logical inventory table in the UI shows the amulet, available items, attempted items and empty/out-of-frame cells. The most recently matched Start-button rectangle is written to `diagnostics\\start_button_last_seen.txt`. Debug images and score maps are written to `diagnostics\`.
 
 ## Important calibration limits
 
