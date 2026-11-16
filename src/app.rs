@@ -557,24 +557,27 @@ impl EnchantmentHelperApp {
                 }
 
                 if let Some(previous) = current_item {
-                    if let Some(updated) = self
+                    let updated_kind = self
                         .logical_inventory
                         .iter()
                         .find(|cell| cell.row == previous.row && cell.col == previous.col)
-                    {
-                        if updated.kind == CellKind::Empty {
+                        .map(|cell| cell.kind);
+                    match updated_kind {
+                        Some(CellKind::Empty) => {
                             self.log(format!(
                                 "[automation] current item r{}c{} is now empty (possibly destroyed); removed from the available queue",
                                 previous.row + 1,
                                 previous.col + 1
                             ));
-                        } else if updated.kind == CellKind::Occupied {
+                        }
+                        Some(CellKind::Occupied) => {
                             self.log(format!(
                                 "[automation] current item r{}c{} remains in inventory; it is marked attempted and will not be clicked again",
                                 previous.row + 1,
                                 previous.col + 1
                             ));
                         }
+                        _ => {}
                     }
                 }
 
