@@ -1615,6 +1615,9 @@ impl eframe::App for EnchantmentHelperApp {
                         {
                             self.scan_inventory_manually(ctx);
                         }
+                    });
+
+                    ui.horizontal_wrapped(|ui| {
                         if ui
                             .add_enabled(
                                 self.run_state != RunState::Running
