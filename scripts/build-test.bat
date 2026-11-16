@@ -121,6 +121,29 @@ if not exist "target\release\jd-enchantment-helper.exe" (
 )
 
 echo.
+echo [INFO] Verifying that the executable does not import OpenCV or MSVC runtime DLLs...
+where dumpbin.exe >nul 2>nul
+if not errorlevel 1 (
+    dumpbin /DEPENDENTS "target\release\jd-enchantment-helper.exe" > "%TEMP%\jd-enchantment-helper-deps.txt"
+    if errorlevel 1 (
+        echo [ERROR] dumpbin could not inspect the Release executable.
+        exit /b 1
+    )
+    findstr /I "opencv_ VCRUNTIME MSVCP140" "%TEMP%\jd-enchantment-helper-deps.txt" >nul
+    if not errorlevel 1 (
+        echo [ERROR] The executable still imports a native dependency that should be static:
+        findstr /I "opencv_ VCRUNTIME MSVCP140" "%TEMP%\jd-enchantment-helper-deps.txt"
+        echo Refusing to package a non-portable executable.
+        del /q "%TEMP%\jd-enchantment-helper-deps.txt" >nul 2>nul
+        exit /b 1
+    )
+    del /q "%TEMP%\jd-enchantment-helper-deps.txt" >nul 2>nul
+    echo [OK] No OpenCV DLL or MSVC runtime DLL imports found.
+) else (
+    echo [WARN] dumpbin is not available; static linking is configured but import verification was skipped.
+)
+
+echo.
 echo [5/5] Preparing portable distribution...
 if exist "dist\JD-Enchantment-Helper-Portable" rmdir /s /q "dist\JD-Enchantment-Helper-Portable"
 mkdir "dist\JD-Enchantment-Helper-Portable"
