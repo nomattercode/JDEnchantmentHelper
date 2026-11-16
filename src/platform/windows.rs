@@ -3,7 +3,10 @@ use opencv::{
     imgproc,
     prelude::*,
 };
-use std::{thread, time::Duration};
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 use windows_sys::Win32::{
     Foundation::{HWND, POINT, RECT},
     Graphics::Gdi::{
@@ -221,6 +224,28 @@ pub fn f12_pressed() -> bool {
     unsafe { GetAsyncKeyState(VK_F12 as i32) < 0 }
 }
 
+/// Avoid a fixed focus delay when the game window is already active.
+/// When switching focus is necessary, poll briefly rather than sleeping the full delay.
+fn ensure_window_foreground(hwnd: HWND, error_message: &str) -> Result<(), String> {
+    if unsafe { GetForegroundWindow() } == hwnd {
+        return Ok(());
+    }
+
+    unsafe {
+        SetForegroundWindow(hwnd);
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(150);
+    while Instant::now() < deadline {
+        if unsafe { GetForegroundWindow() } == hwnd {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    Err(error_message.to_string())
+}
+
 /// Sends a left click to a point relative to the selected top-level window.
 pub fn click_window_point(handle: isize, x: i32, y: i32) -> Result<(), String> {
     click_window_point_with_flags(handle, x, y, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
@@ -246,11 +271,10 @@ pub fn scroll_window(handle: isize, x: i32, y: i32, wheel_delta: i32) -> Result<
         return Err("Игровое окно свёрнуто. Разверните его перед прокруткой.".into());
     }
 
-    unsafe { SetForegroundWindow(hwnd); }
-    thread::sleep(Duration::from_millis(120));
-    if unsafe { GetForegroundWindow() } != hwnd {
-        return Err("Не удалось передать фокус игровому окну для прокрутки.".into());
-    }
+    ensure_window_foreground(
+        hwnd,
+        "Не удалось передать фокус игровому окну для прокрутки.",
+    )?;
 
     let mut bounds = RECT { left: 0, top: 0, right: 0, bottom: 0 };
     if unsafe { GetWindowRect(hwnd, &mut bounds) } == 0 {
@@ -276,7 +300,7 @@ pub fn scroll_window(handle: isize, x: i32, y: i32, wheel_delta: i32) -> Result<
     }
 
     unsafe { mouse_event(MOUSEEVENTF_WHEEL, 0, 0, wheel_delta, 0); }
-    thread::sleep(Duration::from_millis(35));
+    thread::sleep(Duration::from_millis(15));
     unsafe { SetCursorPos(previous_cursor.x, previous_cursor.y); }
 
     if f12_pressed() {
@@ -300,14 +324,10 @@ fn click_window_point_with_flags(
         return Err("Игровое окно свёрнуто. Разверните его перед запуском автоматизации.".into());
     }
 
-    unsafe { SetForegroundWindow(hwnd); }
-    thread::sleep(Duration::from_millis(120));
-    if unsafe { GetForegroundWindow() } != hwnd {
-        return Err(
-            "Система не передала фокус игровому окну. Переключитесь в игру вручную и повторите запуск."
-                .into(),
-        );
-    }
+    ensure_window_foreground(
+        hwnd,
+        "Система не передала фокус игровому окну. Переключитесь в игру вручную и повторите запуск.",
+    )?;
 
     let mut bounds = RECT { left: 0, top: 0, right: 0, bottom: 0 };
     if unsafe { GetWindowRect(hwnd, &mut bounds) } == 0 {
@@ -332,7 +352,7 @@ fn click_window_point_with_flags(
     }
 
     unsafe { mouse_event(down_flag, 0, 0, 0, 0); }
-    thread::sleep(Duration::from_millis(55));
+    thread::sleep(Duration::from_millis(20));
     unsafe { mouse_event(up_flag, 0, 0, 0, 0); }
     Ok(())
 }

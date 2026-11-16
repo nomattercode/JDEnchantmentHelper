@@ -16,6 +16,14 @@ use crate::vision::{
     EnchantDetectorConfig, InventoryConfig, Region,
 };
 
+const AUTOMATION_POLL_INTERVAL: Duration = Duration::from_millis(80);
+const ACTION_SETTLE_DELAY: Duration = Duration::from_millis(90);
+const PAGE_SETTLE_DELAY: Duration = Duration::from_millis(140);
+const PAGE_CONFIRMATION_DELAY: Duration = Duration::from_millis(90);
+const PAGE_RETRY_DELAY: Duration = Duration::from_millis(120);
+const PAGE_CHANGE_CONFIRMATIONS: u8 = 2;
+const RESULT_POLL_INTERVAL: Duration = Duration::from_millis(180);
+
 fn same_detection_region(left: Region, right: Region) -> bool {
     left.x.abs_diff(right.x) <= 3
         && left.y.abs_diff(right.y) <= 3
@@ -467,7 +475,7 @@ impl EnchantmentHelperApp {
         self.stable_page_change_checks = 0;
         self.automation_phase = Some(AutomationPhase::CheckNextPage);
         self.phase_started = Instant::now();
-        self.next_automation_poll = Instant::now() + Duration::from_millis(750);
+        self.next_automation_poll = Instant::now() + PAGE_SETTLE_DELAY;
         self.status = format!(
             "Проход {} из {} · прокрутка вниз после страницы {}.",
             self.current_pass,
@@ -612,7 +620,7 @@ impl EnchantmentHelperApp {
         self.automation_phase = Some(AutomationPhase::DetectEnchantDialog);
         self.run_state = RunState::Running;
         self.phase_started = Instant::now();
-        self.next_automation_poll = Instant::now() + Duration::from_millis(250);
+        self.next_automation_poll = Instant::now() + ACTION_SETTLE_DELAY;
         self.last_wait_log = Instant::now();
         self.status = format!(
             "Запущен проход 1 из {}. Поиск окна зачарования. Начальная страница — первая.",
@@ -650,7 +658,7 @@ impl EnchantmentHelperApp {
         if now < self.next_automation_poll {
             return;
         }
-        self.next_automation_poll = now + Duration::from_millis(260);
+        self.next_automation_poll = now + AUTOMATION_POLL_INTERVAL;
 
         let Some(handle) = self.selected_window else {
             self.stop_automation("Игровое окно не выбрано.");
@@ -716,7 +724,7 @@ impl EnchantmentHelperApp {
                         if self.page_index < self.target_item_page {
                             self.automation_phase = Some(AutomationPhase::ReturnToItemPage);
                             self.phase_started = Instant::now();
-                            self.next_automation_poll = Instant::now() + Duration::from_millis(250);
+                            self.next_automation_poll = Instant::now() + ACTION_SETTLE_DELAY;
                             self.status = format!(
                                 "Амулет выбран. Возвращаюсь на страницу {} за предметом.",
                                 self.target_item_page + 1
@@ -724,7 +732,7 @@ impl EnchantmentHelperApp {
                         } else {
                             self.automation_phase = Some(AutomationPhase::InsertItem);
                             self.phase_started = Instant::now();
-                            self.next_automation_poll = Instant::now() + Duration::from_millis(420);
+                            self.next_automation_poll = Instant::now() + ACTION_SETTLE_DELAY;
                             self.status = "Амулет помещён в окно зачарования. Выбираю предмет.".into();
                         }
                         self.reset_detection_streak();
@@ -769,7 +777,7 @@ impl EnchantmentHelperApp {
                         }
                     } else {
                         self.phase_started = Instant::now();
-                        self.next_automation_poll = Instant::now() + Duration::from_millis(200);
+                        self.next_automation_poll = Instant::now() + ACTION_SETTLE_DELAY;
                     }
                     return;
                 }
@@ -788,7 +796,7 @@ impl EnchantmentHelperApp {
                         self.automation_phase = Some(AutomationPhase::WaitingForStart);
                         self.reset_detection_streak();
                         self.phase_started = Instant::now();
-                        self.next_automation_poll = Instant::now() + Duration::from_millis(420);
+                        self.next_automation_poll = Instant::now() + ACTION_SETTLE_DELAY;
                         self.status = format!(
                             "Проход {} из {} · страница {} · предмет {}, {}. Ожидание кнопки «Начать».",
                             self.current_pass,
@@ -872,7 +880,7 @@ impl EnchantmentHelperApp {
                     self.stable_page_change_checks = 0;
                     if self.unchanged_page_checks == 0 {
                         self.unchanged_page_checks = 1;
-                        self.next_automation_poll = Instant::now() + Duration::from_millis(500);
+                        self.next_automation_poll = Instant::now() + PAGE_RETRY_DELAY;
                         return;
                     }
                     self.log(format!("Следующая страница после {} не обнаружена.", self.page_index + 1));
@@ -890,8 +898,8 @@ impl EnchantmentHelperApp {
                     self.pending_page_fingerprint = Some(fingerprint);
                     self.stable_page_change_checks = 1;
                 }
-                if self.stable_page_change_checks < 3 {
-                    self.next_automation_poll = Instant::now() + Duration::from_millis(400);
+                if self.stable_page_change_checks < PAGE_CHANGE_CONFIRMATIONS {
+                    self.next_automation_poll = Instant::now() + PAGE_CONFIRMATION_DELAY;
                     return;
                 }
 
@@ -925,7 +933,7 @@ impl EnchantmentHelperApp {
                     }
                     self.automation_phase = Some(AutomationPhase::InsertAmulet);
                     self.phase_started = Instant::now();
-                    self.next_automation_poll = Instant::now() + Duration::from_millis(250);
+                    self.next_automation_poll = Instant::now() + ACTION_SETTLE_DELAY;
                     return;
                 }
 
@@ -944,7 +952,7 @@ impl EnchantmentHelperApp {
                 self.stable_page_change_checks = 0;
                 self.automation_phase = Some(AutomationPhase::CheckAmuletPage);
                 self.phase_started = Instant::now();
-                self.next_automation_poll = Instant::now() + Duration::from_millis(750);
+                self.next_automation_poll = Instant::now() + PAGE_SETTLE_DELAY;
                 self.status = format!(
                     "Возвращаюсь к амулету. Текущая страница: {}.",
                     self.page_index + 1
@@ -970,7 +978,7 @@ impl EnchantmentHelperApp {
                     self.stable_page_change_checks = 0;
                     if self.unchanged_page_checks == 0 {
                         self.unchanged_page_checks = 1;
-                        self.next_automation_poll = Instant::now() + Duration::from_millis(500);
+                        self.next_automation_poll = Instant::now() + PAGE_RETRY_DELAY;
                         return;
                     }
                     self.stop_automation("Колесо мыши не переключило страницу вверх при поиске амулета.");
@@ -987,8 +995,8 @@ impl EnchantmentHelperApp {
                     self.pending_page_fingerprint = Some(fingerprint);
                     self.stable_page_change_checks = 1;
                 }
-                if self.stable_page_change_checks < 3 {
-                    self.next_automation_poll = Instant::now() + Duration::from_millis(400);
+                if self.stable_page_change_checks < PAGE_CHANGE_CONFIRMATIONS {
+                    self.next_automation_poll = Instant::now() + PAGE_CONFIRMATION_DELAY;
                     return;
                 }
 
@@ -998,14 +1006,14 @@ impl EnchantmentHelperApp {
                 self.page_index = self.page_index.saturating_sub(1);
                 self.automation_phase = Some(AutomationPhase::ReturnToAmuletPage);
                 self.phase_started = Instant::now();
-                self.next_automation_poll = Instant::now() + Duration::from_millis(250);
+                self.next_automation_poll = Instant::now() + ACTION_SETTLE_DELAY;
                 return;
             }
             Some(AutomationPhase::ReturnToItemPage) => {
                 if self.page_index >= self.target_item_page {
                     self.automation_phase = Some(AutomationPhase::InsertItem);
                     self.phase_started = Instant::now();
-                    self.next_automation_poll = Instant::now() + Duration::from_millis(300);
+                    self.next_automation_poll = Instant::now() + ACTION_SETTLE_DELAY;
                     return;
                 }
 
@@ -1024,7 +1032,7 @@ impl EnchantmentHelperApp {
                 self.stable_page_change_checks = 0;
                 self.automation_phase = Some(AutomationPhase::CheckItemPage);
                 self.phase_started = Instant::now();
-                self.next_automation_poll = Instant::now() + Duration::from_millis(750);
+                self.next_automation_poll = Instant::now() + PAGE_SETTLE_DELAY;
                 self.status = format!(
                     "Возвращаюсь к предметам. Текущая страница: {} из {}.",
                     self.page_index + 1,
@@ -1051,7 +1059,7 @@ impl EnchantmentHelperApp {
                     self.stable_page_change_checks = 0;
                     if self.unchanged_page_checks == 0 {
                         self.unchanged_page_checks = 1;
-                        self.next_automation_poll = Instant::now() + Duration::from_millis(500);
+                        self.next_automation_poll = Instant::now() + PAGE_RETRY_DELAY;
                         return;
                     }
                     self.stop_automation("Колесо мыши не переключило страницу вниз при возврате к предмету.");
@@ -1068,8 +1076,8 @@ impl EnchantmentHelperApp {
                     self.pending_page_fingerprint = Some(fingerprint);
                     self.stable_page_change_checks = 1;
                 }
-                if self.stable_page_change_checks < 3 {
-                    self.next_automation_poll = Instant::now() + Duration::from_millis(400);
+                if self.stable_page_change_checks < PAGE_CHANGE_CONFIRMATIONS {
+                    self.next_automation_poll = Instant::now() + PAGE_CONFIRMATION_DELAY;
                     return;
                 }
 
@@ -1079,7 +1087,7 @@ impl EnchantmentHelperApp {
                 self.page_index = self.page_index.saturating_add(1);
                 self.automation_phase = Some(AutomationPhase::ReturnToItemPage);
                 self.phase_started = Instant::now();
-                self.next_automation_poll = Instant::now() + Duration::from_millis(250);
+                self.next_automation_poll = Instant::now() + ACTION_SETTLE_DELAY;
                 return;
             }
             Some(AutomationPhase::ReturnToFirstPage) => {
@@ -1103,7 +1111,7 @@ impl EnchantmentHelperApp {
                 self.stable_page_change_checks = 0;
                 self.automation_phase = Some(AutomationPhase::CheckPreviousPage);
                 self.phase_started = Instant::now();
-                self.next_automation_poll = Instant::now() + Duration::from_millis(750);
+                self.next_automation_poll = Instant::now() + PAGE_SETTLE_DELAY;
                 self.status = format!(
                     "Возврат на первую страницу. Осталось переходов: {}.",
                     self.return_scroll_remaining
@@ -1132,7 +1140,7 @@ impl EnchantmentHelperApp {
                     self.stable_page_change_checks = 0;
                     if self.unchanged_page_checks == 0 {
                         self.unchanged_page_checks = 1;
-                        self.next_automation_poll = Instant::now() + Duration::from_millis(500);
+                        self.next_automation_poll = Instant::now() + PAGE_RETRY_DELAY;
                         return;
                     }
                     self.stop_automation(
@@ -1151,8 +1159,8 @@ impl EnchantmentHelperApp {
                     self.pending_page_fingerprint = Some(fingerprint);
                     self.stable_page_change_checks = 1;
                 }
-                if self.stable_page_change_checks < 3 {
-                    self.next_automation_poll = Instant::now() + Duration::from_millis(400);
+                if self.stable_page_change_checks < PAGE_CHANGE_CONFIRMATIONS {
+                    self.next_automation_poll = Instant::now() + PAGE_CONFIRMATION_DELAY;
                     return;
                 }
 
@@ -1171,7 +1179,7 @@ impl EnchantmentHelperApp {
                 } else {
                     self.automation_phase = Some(AutomationPhase::ReturnToFirstPage);
                     self.phase_started = Instant::now();
-                    self.next_automation_poll = Instant::now() + Duration::from_millis(300);
+                    self.next_automation_poll = Instant::now() + ACTION_SETTLE_DELAY;
                 }
                 return;
             }
@@ -1253,7 +1261,7 @@ impl EnchantmentHelperApp {
                             self.automation_phase = Some(AutomationPhase::WaitingForOk);
                             self.reset_detection_streak();
                             self.phase_started = Instant::now();
-                            self.next_automation_poll = Instant::now() + Duration::from_millis(550);
+                            self.next_automation_poll = Instant::now() + RESULT_POLL_INTERVAL;
                             self.status = format!(
                                 "Проход {} из {} · страница {} · зачарование запущено. Ожидание «ОК».",
                                 self.current_pass, self.passes_total, self.page_index + 1
@@ -1294,7 +1302,7 @@ impl EnchantmentHelperApp {
                             self.reset_detection_streak();
                             self.automation_phase = Some(AutomationPhase::ReconcileInventory);
                             self.phase_started = Instant::now();
-                            self.next_automation_poll = Instant::now() + Duration::from_millis(750);
+                            self.next_automation_poll = Instant::now() + ACTION_SETTLE_DELAY;
                         }
                         Err(error) => self.stop_automation(&format!("Не удалось нажать «ОК»: {error}")),
                     }
