@@ -100,6 +100,7 @@ pub struct EnchantmentHelperApp {
     next_automation_poll: Instant,
     last_wait_log: Instant,
     phase_started: Instant,
+    paused_at: Option<Instant>,
     inventory_grid_region: Region,
     logical_inventory: Vec<CellDebug>,
     attempted_items: HashSet<(u8, u8)>,
@@ -139,6 +140,7 @@ impl Default for EnchantmentHelperApp {
             next_automation_poll: Instant::now(),
             last_wait_log: Instant::now(),
             phase_started: Instant::now(),
+            paused_at: None,
             inventory_grid_region: Region::default(),
             logical_inventory: Vec::new(),
             attempted_items: HashSet::new(),
@@ -517,6 +519,7 @@ impl EnchantmentHelperApp {
         };
 
         self.completed_runs = 0;
+        self.paused_at = None;
         self.attempted_items.clear();
         self.current_item = None;
         self.amulet_slot = None;
@@ -565,6 +568,7 @@ impl EnchantmentHelperApp {
         let was_active = self.automation_phase.is_some()
             || matches!(self.run_state, RunState::Running | RunState::Paused);
         self.automation_phase = None;
+        self.paused_at = None;
         self.consecutive_matches = 0;
         self.run_state = RunState::Stopped;
         self.status = reason.into();
@@ -1618,6 +1622,7 @@ impl eframe::App for EnchantmentHelperApp {
                             .clicked()
                         {
                             self.run_state = RunState::Paused;
+                            self.paused_at = Some(Instant::now());
                             self.status = "Пауза. F12 по-прежнему останавливает автоматизацию.".into();
                         }
                         if ui
@@ -1627,6 +1632,9 @@ impl eframe::App for EnchantmentHelperApp {
                             )
                             .clicked()
                         {
+                            if let Some(paused_at) = self.paused_at.take() {
+                                self.phase_started += paused_at.elapsed();
+                            }
                             self.run_state = RunState::Running;
                             self.next_automation_poll = Instant::now();
                         }
