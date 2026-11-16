@@ -215,7 +215,7 @@ fn find_enchant_dialog(
     Ok(clip_region(dialog, frame))
 }
 
-fn empty_match(name: &str, threshold: f64) -> MatchResult {
+fn empty_match(name: &str) -> MatchResult {
     MatchResult {
         found: false,
         score: 0.0,
@@ -292,7 +292,7 @@ pub fn analyze_enchant_window(
     }
 
     let dialog_window = find_enchant_dialog(frame, cfg)?;
-    let mut ok_button = empty_match("ok", cfg.confidence_threshold);
+    let mut ok_button = empty_match("ok");
     let mut start_button = None;
     let mut overlay = frame.try_clone()?;
     let mut log = vec![format!(
@@ -303,7 +303,7 @@ pub fn analyze_enchant_window(
         cfg.start_template_threshold
     )];
 
-    if let Some(dialog) = dialog_window {
+    if let Some(dialog) = dialog_window.clone() {
         imgproc::rectangle(
             &mut overlay,
             dialog,
@@ -464,7 +464,7 @@ mod tests {
 
     #[test]
     fn success_ok_template_matches_itself() {
-        let frame = decode_image(SUCCESS_TEMPLATE).unwrap();
+        let frame = grayscale(&decode_image(SUCCESS_TEMPLATE).unwrap()).unwrap();
         let cfg = EnchantDetectorConfig {
             confidence_threshold: 0.95,
             scale_min: 1.0,
@@ -472,8 +472,24 @@ mod tests {
             scale_step: 0.05,
             ..Default::default()
         };
-        let result = analyze_enchant_window(&frame, &cfg).unwrap();
-        assert!(!result.ok_button.found || result.dialog_window.is_none());
+        let result = match_template(&frame, &frame, "ok_success", &cfg, 0.95).unwrap();
+        assert!(result.found, "score={}", result.score);
+        assert!(result.score > 0.99);
+    }
+
+    #[test]
+    fn failure_ok_template_matches_itself() {
+        let frame = grayscale(&decode_image(FAILURE_TEMPLATE).unwrap()).unwrap();
+        let cfg = EnchantDetectorConfig {
+            confidence_threshold: 0.95,
+            scale_min: 1.0,
+            scale_max: 1.0,
+            scale_step: 0.05,
+            ..Default::default()
+        };
+        let result = match_template(&frame, &frame, "ok_failure", &cfg, 0.95).unwrap();
+        assert!(result.found, "score={}", result.score);
+        assert!(result.score > 0.99);
     }
 
     #[test]
