@@ -555,8 +555,8 @@ mod tests {
     #[test]
     fn result_ok_is_found_outside_enchant_dialog() {
         let mut frame = Mat::new_rows_cols_with_default(
-            500,
             340,
+            500,
             core::CV_8UC3,
             Scalar::new(28.0, 35.0, 42.0, 0.0),
         )
