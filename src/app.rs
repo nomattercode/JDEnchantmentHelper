@@ -1,7 +1,7 @@
 use eframe::egui;
-use opencv::prelude::*;
+use opencv::{core::Size, imgproc, prelude::*};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet, VecDeque},
     time::{Duration, Instant},
 };
 
@@ -23,6 +23,25 @@ const PAGE_CONFIRMATION_DELAY: Duration = Duration::from_millis(90);
 const PAGE_RETRY_DELAY: Duration = Duration::from_millis(120);
 const PAGE_CHANGE_CONFIRMATIONS: u8 = 2;
 const RESULT_POLL_INTERVAL: Duration = Duration::from_millis(180);
+const WINDOW_PREVIEW_MAX_WIDTH: i32 = 144;
+const WINDOW_PREVIEW_MAX_HEIGHT: i32 = 84;
+
+fn window_preview_size(width: i32, height: i32) -> Size {
+    let width = width.max(1);
+    let height = height.max(1);
+    let scale = (f64::from(WINDOW_PREVIEW_MAX_WIDTH) / f64::from(width))
+        .min(f64::from(WINDOW_PREVIEW_MAX_HEIGHT) / f64::from(height))
+        .min(1.0);
+    Size::new(
+        (f64::from(width) * scale).round().max(1.0) as i32,
+        (f64::from(height) * scale).round().max(1.0) as i32,
+    )
+}
+
+struct WindowPreview {
+    texture: egui::TextureHandle,
+    size: egui::Vec2,
+}
 
 fn same_detection_region(left: Region, right: Region) -> bool {
     left.x.abs_diff(right.x) <= 3
@@ -175,6 +194,10 @@ enum AutomationPhase {
 pub struct EnchantmentHelperApp {
     windows: Vec<GameWindow>,
     selected_window: Option<isize>,
+    window_previews: HashMap<isize, WindowPreview>,
+    window_preview_errors: HashMap<isize, String>,
+    window_preview_queue: VecDeque<isize>,
+    window_preview_batch_requested: bool,
 
     // A single calibration screenshot is shown only while the user draws the
     // inventory grid. The texture is dropped immediately after calibration.
@@ -223,6 +246,10 @@ impl Default for EnchantmentHelperApp {
         Self {
             windows: list_visible_windows(),
             selected_window: None,
+            window_previews: HashMap::new(),
+            window_preview_errors: HashMap::new(),
+            window_preview_queue: VecDeque::new(),
+            window_preview_batch_requested: false,
             calibration_preview: None,
             calibration_preview_size: egui::Vec2::ZERO,
             select_inventory_region: false,
@@ -312,8 +339,69 @@ impl EnchantmentHelperApp {
             .unwrap_or_else(|| "Выберите окно игры…".into())
     }
 
+    fn request_window_previews(&mut self) {
+        self.window_previews.clear();
+        self.window_preview_errors.clear();
+        self.window_preview_queue = self
+            .windows
+            .iter()
+            .map(|window| window.handle)
+            .collect();
+        self.window_preview_batch_requested = true;
+    }
+
+    fn capture_next_window_preview(&mut self, ctx: &egui::Context) {
+        let Some(handle) = self.window_preview_queue.pop_front() else {
+            return;
+        };
+
+        let result = capture_window(handle).and_then(|frame| {
+            let size = window_preview_size(frame.cols(), frame.rows());
+            let mut thumbnail = opencv::core::Mat::default();
+            imgproc::resize(
+                &frame,
+                &mut thumbnail,
+                size,
+                0.0,
+                0.0,
+                imgproc::INTER_AREA,
+            )
+            .map_err(|error| format!("Не удалось уменьшить миниатюру окна: {error}"))?;
+            let (width, height, pixels) =
+                mat_to_rgb(&thumbnail).map_err(|error| error.to_string())?;
+            Ok((width, height, pixels))
+        });
+
+        match result {
+            Ok((width, height, pixels)) => {
+                let image = egui::ColorImage::from_rgb([width, height], &pixels);
+                let texture = ctx.load_texture(
+                    format!("game-window-preview-{handle}"),
+                    image,
+                    egui::TextureOptions::LINEAR,
+                );
+                self.window_previews.insert(
+                    handle,
+                    WindowPreview {
+                        texture,
+                        size: egui::vec2(width as f32, height as f32),
+                    },
+                );
+                self.window_preview_errors.remove(&handle);
+            }
+            Err(error) => {
+                self.window_preview_errors.insert(handle, error);
+            }
+        }
+
+        if !self.window_preview_queue.is_empty() {
+            ctx.request_repaint_after(Duration::from_millis(25));
+        }
+    }
+
     fn refresh_windows(&mut self) {
         self.windows = list_visible_windows();
+        self.request_window_previews();
         let valid: HashSet<isize> =
             self.windows.iter().map(|window| window.handle).collect();
 
@@ -1386,23 +1474,58 @@ impl EnchantmentHelperApp {
             let selection_enabled = self.automation_phase.is_none();
             let previous_window = self.selected_window;
             ui.add_enabled_ui(selection_enabled, |ui| {
-                egui::ComboBox::from_id_salt("game_window")
+                let combo = egui::ComboBox::from_id_salt("game_window")
                     .width((ui.available_width() - 90.0).max(180.0))
+                    .height(420.0)
                     .selected_text(self.selected_label())
                     .show_ui(ui, |ui| {
-                        for window in &self.windows {
-                            let label = format!(
-                                "{} · {}×{}",
-                                window.title, window.width, window.height
-                            );
-                            ui.selectable_value(
-                                &mut self.selected_window,
-                                Some(window.handle),
-                                label,
-                            );
+                        for window in self.windows.clone() {
+                            ui.horizontal(|ui| {
+                                if let Some(preview) = self.window_previews.get(&window.handle) {
+                                    let scale = (112.0 / preview.size.x)
+                                        .min(66.0 / preview.size.y)
+                                        .min(1.0);
+                                    ui.add(egui::Image::new((
+                                        preview.texture.id(),
+                                        preview.size * scale,
+                                    )));
+                                } else if self.window_preview_queue.contains(&window.handle) {
+                                    ui.allocate_ui(egui::vec2(112.0, 58.0), |ui| {
+                                        ui.centered_and_justified(|ui| {
+                                            ui.small("Снимок…");
+                                        });
+                                    });
+                                } else if self.window_preview_errors.contains_key(&window.handle) {
+                                    ui.allocate_ui(egui::vec2(112.0, 58.0), |ui| {
+                                        ui.centered_and_justified(|ui| {
+                                            ui.small("Нет превью");
+                                        });
+                                    });
+                                } else {
+                                    ui.allocate_ui(egui::vec2(112.0, 58.0), |ui| {
+                                        ui.centered_and_justified(|ui| {
+                                            ui.small("Превью не снято");
+                                        });
+                                    });
+                                }
+
+                                let label = format!(
+                                    "{} · {}×{}",
+                                    window.title, window.width, window.height
+                                );
+                                ui.selectable_value(
+                                    &mut self.selected_window,
+                                    Some(window.handle),
+                                    label,
+                                );
+                            });
+                            ui.separator();
                         }
                     });
-                if ui.button("↻").on_hover_text("Обновить список окон").clicked() {
+                if combo.inner.is_some() && !self.window_preview_batch_requested {
+                    self.request_window_previews();
+                }
+                if ui.button("↻").on_hover_text("Обновить список окон и миниатюры").clicked() {
                     self.refresh_windows();
                 }
             });
@@ -1542,6 +1665,7 @@ impl EnchantmentHelperApp {
 impl eframe::App for EnchantmentHelperApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.update_automation();
+        self.capture_next_window_preview(ctx);
 
         egui::TopBottomPanel::top("header").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -1674,12 +1798,28 @@ impl eframe::App for EnchantmentHelperApp {
 
         if self.automation_phase.is_some() {
             ctx.request_repaint_after(Duration::from_millis(35));
+        } else if !self.window_preview_queue.is_empty() {
+            ctx.request_repaint_after(Duration::from_millis(25));
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn window_preview_size_fits_bounds_and_preserves_aspect_ratio() {
+        let size = super::window_preview_size(1920, 1080);
+        assert!(size.width <= super::WINDOW_PREVIEW_MAX_WIDTH);
+        assert!(size.height <= super::WINDOW_PREVIEW_MAX_HEIGHT);
+        assert!((f64::from(size.width) / f64::from(size.height) - 16.0 / 9.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn small_window_preview_is_not_upscaled() {
+        let size = super::window_preview_size(100, 70);
+        assert_eq!((size.width, size.height), (100, 70));
+    }
+
     #[test]
     fn detection_streak_requires_the_same_button_location() {
         let first = super::Region { x: 10, y: 20, width: 82, height: 42 };
