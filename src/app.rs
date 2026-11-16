@@ -844,11 +844,17 @@ impl EnchantmentHelperApp {
             ui.add(egui::DragValue::new(&mut config.origin_y).range(0..=3000));
             ui.end_row();
 
+            let previous_columns = config.columns;
+            let previous_rows = config.rows;
             ui.label("Столбцы");
             ui.add(egui::DragValue::new(&mut config.columns).range(1..=12));
             ui.label("Строки");
             ui.add(egui::DragValue::new(&mut config.rows).range(1..=30));
             ui.end_row();
+            if config.columns != previous_columns || config.rows != previous_rows {
+                self.inventory_grid_region = Region::default();
+                self.status = "Число строк/столбцов изменено. Повторно выделите сетку инвентаря.".into();
+            }
 
             ui.label("Ячейка W/H");
             ui.add(egui::DragValue::new(&mut config.cell_width).range(8..=200));
@@ -966,6 +972,7 @@ impl EnchantmentHelperApp {
         ui.horizontal(|ui| {
             ui.label("Игровое окно");
             let selection_enabled = self.automation_phase.is_none();
+            let previous_window = self.selected_window;
             ui.add_enabled_ui(selection_enabled, |ui| {
                 let selected = self.selected_label();
                 egui::ComboBox::from_id_salt("game_window")
@@ -990,6 +997,17 @@ impl EnchantmentHelperApp {
             });
             if !selection_enabled {
                 ui.small("Выбор блокирован во время выполнения");
+            }
+            if self.selected_window != previous_window {
+                self.inventory_grid_region = Region::default();
+                self.logical_inventory.clear();
+                self.attempted_items.clear();
+                self.amulet_slot = None;
+                self.current_item = None;
+                self.enchant.start_button_region = Region::default();
+                self.status = "Окно изменено. Повторно выделите сетку инвентаря; START будет найден по шаблону.".into();
+                self.capture_selected_preview(ctx);
+                self.log("[window] target changed; old ROI coordinates cleared");
             }
         });
 
