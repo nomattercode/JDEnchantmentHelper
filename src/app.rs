@@ -139,6 +139,14 @@ fn same_inventory_page(left: u64, right: u64) -> bool {
     (left ^ right).count_ones() <= 6
 }
 
+fn should_start_another_pass(
+    current_pass: u8,
+    passes_total: u8,
+    surviving_items: u32,
+) -> bool {
+    current_pass < passes_total && surviving_items > 0
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AutomationPhase {
     DetectEnchantDialog,
@@ -484,7 +492,11 @@ impl EnchantmentHelperApp {
             self.surviving_items_in_pass
         ));
 
-        if self.current_pass >= self.passes_total || self.surviving_items_in_pass == 0 {
+        if !should_start_another_pass(
+            self.current_pass,
+            self.passes_total,
+            self.surviving_items_in_pass,
+        ) {
             let reason = if self.surviving_items_in_pass == 0 && self.current_pass < self.passes_total {
                 format!(
                     "Работа завершена досрочно: после прохода {} уцелевших предметов не осталось.",
@@ -1464,5 +1476,17 @@ mod tests {
         let other_page = 0b0101_0101_u64;
         assert!(super::same_inventory_page(first, jittered));
         assert!(!super::same_inventory_page(first, other_page));
+    }
+
+    #[test]
+    fn one_pass_stops_after_the_first_full_inventory_sweep() {
+        assert!(!super::should_start_another_pass(1, 1, 12));
+    }
+
+    #[test]
+    fn another_full_pass_starts_only_when_surviving_items_remain() {
+        assert!(super::should_start_another_pass(1, 2, 12));
+        assert!(!super::should_start_another_pass(1, 2, 0));
+        assert!(!super::should_start_another_pass(2, 2, 12));
     }
 }

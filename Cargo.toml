@@ -25,4 +25,4 @@ codegen-units = 1
 strip = true
 
 [build-dependencies]
-embed-manifest = "1.4.0"
+embed-manifest = "=1.4.0"
