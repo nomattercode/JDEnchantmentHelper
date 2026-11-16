@@ -1291,24 +1291,31 @@ impl EnchantmentHelperApp {
             return;
         }
 
-        ui.horizontal(|ui| {
-            let start_changed = ui
-                .checkbox(&mut self.select_start_region, "Ручная область START")
-                .changed();
-            if start_changed && self.select_start_region {
-                self.select_inventory_region = false;
-            }
-            let inventory_changed = ui
-                .checkbox(&mut self.select_inventory_region, "Область сетки инвентаря")
-                .changed();
-            if inventory_changed && self.select_inventory_region {
-                self.select_start_region = false;
-            }
-            if ui.button("Обновить кадр").clicked() {
-                self.capture_selected_preview(ctx);
-            }
+        let can_calibrate = self.automation_phase.is_none();
+        ui.add_enabled_ui(can_calibrate, |ui| {
+            ui.horizontal(|ui| {
+                let start_changed = ui
+                    .checkbox(&mut self.select_start_region, "Ручная область START")
+                    .changed();
+                if start_changed && self.select_start_region {
+                    self.select_inventory_region = false;
+                }
+                let inventory_changed = ui
+                    .checkbox(&mut self.select_inventory_region, "Область сетки инвентаря")
+                    .changed();
+                if inventory_changed && self.select_inventory_region {
+                    self.select_start_region = false;
+                }
+                if ui.button("Обновить кадр").clicked() {
+                    self.capture_selected_preview(ctx);
+                }
+            });
         });
-        ui.small("Окно зачарования и START ищутся по шаблонам автоматически. Для инвентаря пока требуется один раз выделить всю сетку от первой до последней ячейки.");
+        if can_calibrate {
+            ui.small("Окно зачарования и START ищутся по шаблонам автоматически. Для инвентаря пока требуется один раз выделить всю сетку от первой до последней ячейки.");
+        } else {
+            ui.small("Калибровка заблокирована до завершения или остановки серии.");
+        }
 
         if let Some(handle) = self.selected_window {
             if let Some(texture) = self.window_previews.get(&handle) {
@@ -1319,25 +1326,28 @@ impl EnchantmentHelperApp {
                 let image_size = raw_size * scale;
                 let response = ui.add(
                     egui::Image::new((texture.id(), image_size))
-                        .sense(if self.select_start_region || self.select_inventory_region {
+                        .sense(if can_calibrate && (self.select_start_region || self.select_inventory_region) {
                             egui::Sense::click_and_drag()
                         } else {
                             egui::Sense::hover()
                         }),
                 );
 
-                if (self.select_start_region || self.select_inventory_region)
+                if can_calibrate
+                    && (self.select_start_region || self.select_inventory_region)
                     && response.drag_started()
                 {
                     self.region_drag_start = response.interact_pointer_pos();
                 }
-                if (self.select_start_region || self.select_inventory_region)
+                if can_calibrate
+                    && (self.select_start_region || self.select_inventory_region)
                     && response.dragged()
                     && self.region_drag_start.is_none()
                 {
                     self.region_drag_start = response.interact_pointer_pos();
                 }
-                if (self.select_start_region || self.select_inventory_region)
+                if can_calibrate
+                    && (self.select_start_region || self.select_inventory_region)
                     && response.drag_stopped()
                 {
                     let start = self.region_drag_start.take();
@@ -1597,29 +1607,39 @@ impl eframe::App for EnchantmentHelperApp {
                 });
 
                 ui.collapsing("Распознавание и калибровка", |ui| {
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(&mut self.mode, Mode::Enchant, "Зачарование");
-                        ui.selectable_value(&mut self.mode, Mode::Inventory, "Инвентарь");
+                    ui.add_enabled_ui(self.automation_phase.is_none(), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut self.mode, Mode::Enchant, "Зачарование");
+                            ui.selectable_value(&mut self.mode, Mode::Inventory, "Инвентарь");
+                        });
+                        match self.mode {
+                            Mode::Enchant => self.enchant_ui(ui),
+                            Mode::Inventory => self.inventory_ui(ui),
+                        }
                     });
-                    match self.mode {
-                        Mode::Enchant => self.enchant_ui(ui),
-                        Mode::Inventory => self.inventory_ui(ui),
+                    if self.automation_phase.is_some() {
+                        ui.small("Пороговые значения и геометрия зафиксированы на время серии.");
                     }
                 });
 
                 ui.collapsing("Диагностика по файлу", |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Путь");
-                        ui.text_edit_singleline(&mut self.image_path);
+                    ui.add_enabled_ui(self.automation_phase.is_none(), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Путь");
+                            ui.text_edit_singleline(&mut self.image_path);
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button("Анализировать файл").clicked() {
+                                self.analyze_file(ctx);
+                            }
+                            ui.checkbox(&mut self.save_debug, "Сохранять debug PNG");
+                            ui.label("Папка");
+                            ui.text_edit_singleline(&mut self.output_dir);
+                        });
                     });
-                    ui.horizontal(|ui| {
-                        if ui.button("Анализировать файл").clicked() {
-                            self.analyze_file(ctx);
-                        }
-                        ui.checkbox(&mut self.save_debug, "Сохранять debug PNG");
-                        ui.label("Папка");
-                        ui.text_edit_singleline(&mut self.output_dir);
-                    });
+                    if self.automation_phase.is_some() {
+                        ui.small("Диагностика временно недоступна во время автоматизации.");
+                    }
                 });
 
                 ui.columns(2, |columns| {
