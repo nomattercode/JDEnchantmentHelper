@@ -19,9 +19,9 @@ impl DetectionMethod {
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::GrayscaleVariance => "Контраст (stddev)",
+            Self::GrayscaleVariance => "Контраст (среднеквадратичное отклонение)",
             Self::EdgeDensity => "Плотность границ",
-            Self::Saturation => "Насыщенность HSV",
+            Self::Saturation => "Насыщенность цвета",
             Self::Combined => "Комбинированный",
         }
     }

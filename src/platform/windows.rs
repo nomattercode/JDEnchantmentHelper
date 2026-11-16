@@ -123,13 +123,13 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
 
     let window_dc: HDC = unsafe { GetWindowDC(hwnd) };
     if window_dc.is_null() {
-        return Err("GetWindowDC не смог получить контекст окна".into());
+        return Err("Не удалось получить контекст игрового окна".into());
     }
 
     let memory_dc: HDC = unsafe { CreateCompatibleDC(window_dc) };
     if memory_dc.is_null() {
         unsafe { ReleaseDC(hwnd, window_dc); }
-        return Err("CreateCompatibleDC завершился ошибкой".into());
+        return Err("Не удалось создать контекст захвата изображения".into());
     }
 
     let bitmap: HBITMAP = unsafe { CreateCompatibleBitmap(window_dc, width, height) };
@@ -138,19 +138,19 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
             DeleteDC(memory_dc);
             ReleaseDC(hwnd, window_dc);
         }
-        return Err("CreateCompatibleBitmap завершился ошибкой".into());
+        return Err("Не удалось создать буфер изображения".into());
     }
 
     let mut selected_object: HGDIOBJ = std::ptr::null_mut();
     let capture_result = (|| -> Result<Mat, String> {
         selected_object = unsafe { SelectObject(memory_dc, bitmap as HGDIOBJ) };
         if selected_object.is_null() {
-            return Err("SelectObject не смог выбрать bitmap".into());
+            return Err("Не удалось выбрать буфер изображения для захвата".into());
         }
 
         let copied = unsafe { BitBlt(memory_dc, 0, 0, width, height, window_dc, 0, 0, SRCCOPY) };
         if copied == 0 {
-            return Err("BitBlt не смог получить изображение окна".into());
+            return Err("Не удалось скопировать изображение игрового окна".into());
         }
 
         // GetDIBits requires the bitmap to be deselected from the memory DC.
@@ -182,14 +182,14 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
             )
         };
         if lines == 0 {
-            return Err("GetDIBits не смог прочитать пиксели".into());
+            return Err("Не удалось прочитать пиксели игрового окна".into());
         }
 
         let bgra = Mat::new_rows_cols_with_default(height, width, CV_8UC4, Scalar::all(0.0))
-            .map_err(|error| format!("OpenCV: {error}"))?;
+            .map_err(|error| format!("Ошибка обработки изображения: {error}"))?;
         let mut bgra = bgra;
         bgra.data_bytes_mut()
-            .map_err(|error| format!("OpenCV: {error}"))?
+            .map_err(|error| format!("Ошибка обработки изображения: {error}"))?
             .copy_from_slice(&pixels);
 
         let mut bgr = Mat::default();
@@ -200,7 +200,7 @@ pub fn capture_window(handle: isize) -> Result<Mat, String> {
             0,
             core::AlgorithmHint::ALGO_HINT_DEFAULT,
         )
-        .map_err(|error| format!("OpenCV: {error}"))?;
+        .map_err(|error| format!("Ошибка обработки изображения: {error}"))?;
         Ok(bgr)
     })();
 
@@ -304,7 +304,7 @@ fn click_window_point_with_flags(
     thread::sleep(Duration::from_millis(120));
     if unsafe { GetForegroundWindow() } != hwnd {
         return Err(
-            "Windows не передала фокус игровому окну. Переключитесь в игру вручную и повторите запуск."
+            "Система не передала фокус игровому окну. Переключитесь в игру вручную и повторите запуск."
                 .into(),
         );
     }
@@ -325,7 +325,7 @@ fn click_window_point_with_flags(
         return Err("Аварийная остановка F12 перед кликом".into());
     }
     if unsafe { SetCursorPos(bounds.left + x, bounds.top + y) } == 0 {
-        return Err("Windows не смогла переместить курсор к кнопке".into());
+        return Err("Не удалось переместить курсор к кнопке".into());
     }
     if f12_pressed() {
         return Err("Аварийная остановка F12 перед кликом".into());

@@ -549,7 +549,7 @@ impl EnchantmentHelperApp {
             return;
         }
 
-        let handle = self.selected_window.expect("checked above");
+        let handle = self.selected_window.expect("Игровое окно проверено перед запуском");
         let frame = match capture_window(handle) {
             Ok(frame) => frame,
             Err(error) => {
@@ -980,7 +980,7 @@ impl EnchantmentHelperApp {
         if now.duration_since(self.phase_started) > timeout {
             let message = match phase {
                 Some(AutomationPhase::WaitingForStart) => "Не дождался активации кнопки «Начать».",
-                Some(AutomationPhase::WaitingForOk) => "Не дождался появления кнопки OK.",
+                Some(AutomationPhase::WaitingForOk) => "Не дождался появления кнопки «ОК».",
                 Some(AutomationPhase::CheckNextPage) => "Не удалось определить результат прокрутки инвентаря.",
                 Some(AutomationPhase::CheckPreviousPage) => "Не удалось подтвердить переход на предыдущую страницу.",
                 Some(AutomationPhase::ReturnToFirstPage) => "Не удалось вернуться к первой странице инвентаря.",
@@ -1042,7 +1042,7 @@ impl EnchantmentHelperApp {
                             self.phase_started = Instant::now();
                             self.next_automation_poll = Instant::now() + Duration::from_millis(550);
                             self.status = format!(
-                                "Проход {} из {} · страница {} · зачарование запущено. Ожидание OK.",
+                                "Проход {} из {} · страница {} · зачарование запущено. Ожидание «ОК».",
                                 self.current_pass, self.passes_total, self.page_index + 1
                             );
                         }
@@ -1077,74 +1077,21 @@ impl EnchantmentHelperApp {
                     let y = rect.y + rect.height / 2;
                     match click_window_point(handle, x, y) {
                         Ok(()) => {
-                            self.log("Кнопка OK подтверждена и нажата. Обновляю текущую страницу инвентаря.");
+                            self.log("Кнопка «ОК» подтверждена и нажата. Обновляю текущую страницу инвентаря.");
                             self.reset_detection_streak();
                             self.automation_phase = Some(AutomationPhase::ReconcileInventory);
                             self.phase_started = Instant::now();
                             self.next_automation_poll = Instant::now() + Duration::from_millis(750);
                         }
-                        Err(error) => self.stop_automation(&format!("Не удалось нажать OK: {error}")),
+                        Err(error) => self.stop_automation(&format!("Не удалось нажать «ОК»: {error}")),
                     }
                 } else if now.duration_since(self.last_wait_log) >= Duration::from_secs(10) {
                     self.last_wait_log = now;
-                    self.log("Ожидание кнопки OK.");
+                    self.log("Ожидание кнопки «ОК».");
                 }
             }
             _ => {}
         }
-    }
-
-    fn logical_inventory_ui(&self, ui: &mut egui::Ui) {
-        ui.label(format!(
-            "Проход {} из {} · страница {} · обработано на странице: {}",
-            self.current_pass,
-            self.passes_total,
-            self.page_index + 1,
-            self.processed_slots_current_page.len()
-        ));
-        if self.logical_inventory.is_empty() {
-            ui.label("Слоты появятся после начала серии зачарования.");
-            return;
-        }
-
-        egui::Grid::new("logical_inventory_table")
-            .spacing(egui::vec2(8.0, 4.0))
-            .show(ui, |ui| {
-                for row in 0..self.inventory.rows {
-                    for col in 0..self.inventory.columns {
-                        let cell = self
-                            .logical_inventory
-                            .iter()
-                            .find(|cell| cell.row == row && cell.col == col);
-
-                        let (symbol, color, hint) = match cell {
-                            Some(cell) if cell.kind == CellKind::Amulet => {
-                                ("А", egui::Color32::YELLOW, "Ячейка амулета")
-                            }
-                            Some(cell)
-                                if cell.kind == CellKind::Occupied
-                                    && self.processed_slots_current_page.contains(&(row, col)) =>
-                            {
-                                ("✓", egui::Color32::LIGHT_GRAY, "Уже обработан в этом проходе")
-                            }
-                            Some(cell) if cell.kind == CellKind::Occupied => {
-                                ("●", egui::Color32::LIGHT_GREEN, "Предмет ожидает зачарования")
-                            }
-                            Some(cell) if cell.kind == CellKind::BeforeStart => {
-                                ("—", egui::Color32::GRAY, "Слот до начальной позиции")
-                            }
-                            Some(cell) if cell.kind == CellKind::OutOfFrame => {
-                                ("?", egui::Color32::GRAY, "За границами кадра")
-                            }
-                            Some(_) => ("·", egui::Color32::LIGHT_RED, "Пустая ячейка"),
-                            None => ("?", egui::Color32::GRAY, "Ячейка не просканирована"),
-                        };
-                        ui.colored_label(color, egui::RichText::new(symbol).strong().monospace())
-                            .on_hover_text(format!("Строка {}, столбец {}: {hint}", row + 1, col + 1));
-                    }
-                    ui.end_row();
-                }
-            });
     }
 
     fn inventory_settings_ui(&mut self, ui: &mut egui::Ui) {
@@ -1198,7 +1145,7 @@ impl EnchantmentHelperApp {
 
         if self.inventory_grid_region.is_configured() {
             ui.label(format!(
-                "Сетка настроена: {}×{} px, шаг {}×{} px.",
+                "Сетка настроена: {}×{} px, шаг {}×{} пикс.",
                 self.inventory_grid_region.width,
                 self.inventory_grid_region.height,
                 self.inventory.step_x,
@@ -1490,10 +1437,6 @@ impl eframe::App for EnchantmentHelperApp {
                     if self.automation_phase.is_some() {
                         ui.small("Настройки заблокированы на время серии.");
                     }
-                });
-
-                ui.collapsing("Таблица текущей страницы", |ui| {
-                    self.logical_inventory_ui(ui);
                 });
 
                 ui.heading("Журнал");
