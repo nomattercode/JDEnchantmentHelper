@@ -433,6 +433,46 @@ impl EnchantmentHelperApp {
         Ok(())
     }
 
+    fn scan_inventory_manually(&mut self, ctx: &egui::Context) {
+        if self.automation_phase.is_some() {
+            self.status = "Нельзя вручную сканировать инвентарь во время автоматизации.".into();
+            return;
+        }
+        let Some(handle) = self.selected_window else {
+            self.status = "Сначала выберите игровое окно.".into();
+            return;
+        };
+        if !self.inventory_grid_region.is_configured() {
+            self.select_inventory_region = true;
+            self.status = "Сначала выделите всю сетку инвентаря на превью.".into();
+            return;
+        }
+
+        let frame = match capture_window(handle) {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.status = format!("Не удалось получить кадр игры: {error}");
+                return;
+            }
+        };
+
+        self.attempted_items.clear();
+        self.current_item = None;
+        self.completed_runs = 0;
+        self.logical_inventory.clear();
+
+        match self.scan_inventory_snapshot(ctx, &frame, true) {
+            Ok(()) => {
+                self.status = "Сканирование завершено без игровых кликов. Проверьте логическую таблицу перед запуском.".into();
+                self.log("[inventory] manual live scan complete; no game input was sent");
+            }
+            Err(error) => {
+                self.status = error.clone();
+                self.log(format!("[inventory][error] {error}"));
+            }
+        }
+    }
+
     fn next_unattempted_item(&self) -> Option<CellDebug> {
         self.logical_inventory
             .iter()
@@ -1545,6 +1585,15 @@ impl eframe::App for EnchantmentHelperApp {
                         }
 
                         ui.separator();
+                        if ui
+                            .add_enabled(
+                                self.automation_phase.is_none() && self.selected_window.is_some(),
+                                egui::Button::new("Сканировать инвентарь"),
+                            )
+                            .clicked()
+                        {
+                            self.scan_inventory_manually(ctx);
+                        }
                         if ui
                             .add_enabled(
                                 self.run_state != RunState::Running
