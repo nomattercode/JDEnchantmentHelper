@@ -1,16 +1,18 @@
 use eframe::egui;
 use opencv::prelude::*;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 
 use crate::model::{GameWindow, RunState, MAX_RUNS};
 use crate::platform::{
     capture_window, click_window_point, f12_pressed, list_visible_windows,
+    right_click_window_point,
 };
 use crate::vision::{
     analyze_enchant_window, load_image, mat_to_rgb, save_png, scan_inventory,
+    inventory_scanner::{CellDebug, CellKind},
     EnchantDetectorConfig, InventoryConfig, Region,
 };
 
@@ -22,8 +24,11 @@ enum Mode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AutomationPhase {
+    InsertAmulet,
+    InsertItem,
     WaitingForStart,
     WaitingForOk,
+    ReconcileInventory,
 }
 
 pub struct EnchantmentHelperApp {
@@ -39,6 +44,12 @@ pub struct EnchantmentHelperApp {
     consecutive_matches: u8,
     next_automation_poll: Instant,
     last_wait_log: Instant,
+    phase_started: Instant,
+    inventory_grid_region: Region,
+    logical_inventory: Vec<CellDebug>,
+    attempted_items: HashSet<(u8, u8)>,
+    amulet_slot: Option<CellDebug>,
+    current_item: Option<CellDebug>,
     status: String,
     image_path: String,
     output_dir: String,
@@ -51,6 +62,7 @@ pub struct EnchantmentHelperApp {
     summary: String,
     logs: Vec<String>,
     select_start_region: bool,
+    select_inventory_region: bool,
     region_drag_start: Option<egui::Pos2>,
 }
 
@@ -69,7 +81,13 @@ impl Default for EnchantmentHelperApp {
             consecutive_matches: 0,
             next_automation_poll: Instant::now(),
             last_wait_log: Instant::now(),
-            status: "Выберите игровое окно и выделите область кнопки «Начать».".into(),
+            phase_started: Instant::now(),
+            inventory_grid_region: Region::default(),
+            logical_inventory: Vec::new(),
+            attempted_items: HashSet::new(),
+            amulet_slot: None,
+            current_item: None,
+            status: "Выберите окно игры и один раз выделите область сетки инвентаря.".into(),
             image_path: String::new(),
             output_dir: "diagnostics".into(),
             mode: Mode::Enchant,
@@ -81,6 +99,7 @@ impl Default for EnchantmentHelperApp {
             summary: "Ожидание игрового окна.".into(),
             logs: vec!["[app] Ready. F12 is the global emergency stop.".into()],
             select_start_region: false,
+            select_inventory_region: false,
             region_drag_start: None,
         }
     }
@@ -261,7 +280,110 @@ impl EnchantmentHelperApp {
         }
     }
 
-    fn start_automation(&mut self) {
+    fn scan_inventory_snapshot(
+        &mut self,
+        ctx: &egui::Context,
+        frame: &opencv::core::Mat,
+        initial: bool,
+    ) -> Result<(), String> {
+        let scan = scan_inventory(frame, &self.inventory)
+            .map_err(|error| format!("Не удалось просканировать инвентарь: {error}"))?;
+
+        let amulet = scan
+            .cells
+            .iter()
+            .find(|cell| {
+                cell.row == self.inventory.amulet_row
+                    && cell.col == self.inventory.amulet_col
+            })
+            .cloned()
+            .ok_or_else(|| "Ячейка амулета не входит в область инвентаря.".to_string())?;
+
+        if amulet.score < self.inventory.threshold {
+            return Err(format!(
+                "Амулет не распознан в ячейке {}:{} (оценка {:.3}, порог {:.3}).",
+                amulet.row + 1,
+                amulet.col + 1,
+                amulet.score,
+                self.inventory.threshold
+            ));
+        }
+
+        let previous = self.logical_inventory.clone();
+        for old in &previous {
+            if old.kind != CellKind::Occupied {
+                continue;
+            }
+            if let Some(updated) = scan
+                .cells
+                .iter()
+                .find(|cell| cell.row == old.row && cell.col == old.col)
+            {
+                if updated.kind == CellKind::Empty {
+                    self.log(format!(
+                        "[inventory][table] slot r{}c{} changed ITEM -> EMPTY; it will be skipped",
+                        old.row + 1,
+                        old.col + 1
+                    ));
+                } else if updated.kind == CellKind::OutOfFrame {
+                    self.log(format!(
+                        "[inventory][table] slot r{}c{} is outside the captured frame; it will not be clicked",
+                        old.row + 1,
+                        old.col + 1
+                    ));
+                }
+            }
+        }
+
+        self.logical_inventory = scan.cells.clone();
+        self.amulet_slot = Some(amulet);
+        for line in &scan.log {
+            self.log(line.clone());
+        }
+
+        let candidate_count = self
+            .logical_inventory
+            .iter()
+            .filter(|cell| cell.kind == CellKind::Occupied)
+            .count();
+        self.summary = format!(
+            "Логическая таблица: {} ячеек · предметов: {} · попыток: {}",
+            self.logical_inventory.len(),
+            candidate_count,
+            self.completed_runs
+        );
+
+        self.save_debug("inventory_live_overlay.png", &scan.overlay);
+        self.save_debug("inventory_live_score_map.png", &scan.score_map);
+        self.set_preview(ctx, &scan.overlay);
+
+        if initial {
+            self.log(format!(
+                "[inventory][table] initialized: cells={} items={} amulet=r{}c{}",
+                self.logical_inventory.len(),
+                candidate_count,
+                self.inventory.amulet_row + 1,
+                self.inventory.amulet_col + 1
+            ));
+        } else {
+            self.log(format!(
+                "[inventory][table] refreshed after OK: items currently detected={candidate_count}"
+            ));
+        }
+        Ok(())
+    }
+
+    fn next_unattempted_item(&self) -> Option<CellDebug> {
+        self.logical_inventory
+            .iter()
+            .find(|cell| {
+                cell.kind == CellKind::Occupied
+                    && !self.attempted_items.contains(&(cell.row, cell.col))
+            })
+            .cloned()
+    }
+
+    fn start_automation(&mut self, ctx: &egui::Context) {
         if self.run_state == RunState::Running || self.run_state == RunState::Paused {
             return;
         }
@@ -269,21 +391,67 @@ impl EnchantmentHelperApp {
             self.status = "Сначала выберите окно игры.".into();
             return;
         }
+        if !self.inventory_grid_region.is_configured() {
+            self.select_inventory_region = true;
+            self.select_start_region = false;
+            self.mode = Mode::Inventory;
+            self.status = "Перед запуском обведите на превью всю сетку инвентаря — от первой до последней ячейки.".into();
+            return;
+        }
+
+        let Some(handle) = self.selected_window else {
+            return;
+        };
+        let frame = match capture_window(handle) {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.status = format!("Не удалось получить начальный кадр игры: {error}");
+                return;
+            }
+        };
+
         self.completed_runs = 0;
+        self.attempted_items.clear();
+        self.current_item = None;
+        self.amulet_slot = None;
+        self.logical_inventory.clear();
+
+        if let Err(error) = self.scan_inventory_snapshot(ctx, &frame, true) {
+            self.run_state = RunState::Stopped;
+            self.automation_phase = None;
+            self.status = error.clone();
+            self.log(format!("[automation] initial inventory scan failed: {error}"));
+            return;
+        }
+
+        let Some(item) = self.next_unattempted_item() else {
+            self.run_state = RunState::Stopped;
+            self.automation_phase = None;
+            self.status = "В инвентаре не найдено предметов для зачарования после стартовой ячейки.".into();
+            return;
+        };
+
+        self.current_item = Some(item.clone());
         self.consecutive_matches = 0;
-        self.automation_phase = Some(AutomationPhase::WaitingForStart);
+        self.automation_phase = Some(AutomationPhase::InsertAmulet);
         self.run_state = RunState::Running;
-        self.next_automation_poll = Instant::now();
+        self.phase_started = Instant::now();
+        self.next_automation_poll = Instant::now() + Duration::from_millis(250);
         self.last_wait_log = Instant::now();
         self.status = format!(
-            "Ожидание синей кнопки «Начать». F12 — аварийный стоп. План: {} прогон(ов).",
-            self.runs
+            "Инвентарь просканирован. Подготовка амулета и предмета r{}c{}. F12 — аварийный стоп.",
+            item.row + 1,
+            item.col + 1
         );
         self.log(format!(
-            "[automation] armed; target runs={} start-template threshold={:.2} blue ratio={:.2}",
+            "[automation] armed; target runs={} inventory items={} first=r{}c{}",
             self.runs,
-            self.enchant.start_template_threshold,
-            self.enchant.min_blue_ratio
+            self.logical_inventory
+                .iter()
+                .filter(|cell| cell.kind == CellKind::Occupied)
+                .count(),
+            item.row + 1,
+            item.col + 1
         ));
     }
 
@@ -326,6 +494,153 @@ impl EnchantmentHelperApp {
             }
         };
 
+        match self.automation_phase {
+            Some(AutomationPhase::InsertAmulet) => {
+                let Some(amulet) = self.amulet_slot.clone() else {
+                    self.stop_automation("В логической таблице не задана ячейка амулета.");
+                    return;
+                };
+                let x = amulet.rect.x + amulet.rect.width / 2;
+                let y = amulet.rect.y + amulet.rect.height / 2;
+                match right_click_window_point(handle, x, y) {
+                    Ok(()) => {
+                        self.log(format!(
+                            "[automation] right-click amulet at r{}c{} ({x},{y})",
+                            amulet.row + 1,
+                            amulet.col + 1
+                        ));
+                        self.automation_phase = Some(AutomationPhase::InsertItem);
+                        self.phase_started = Instant::now();
+                        self.next_automation_poll = Instant::now() + Duration::from_millis(420);
+                        self.status = "Амулет выбран. Перенос предмета в окно зачарования.".into();
+                    }
+                    Err(error) => {
+                        self.stop_automation(&format!("Не удалось выбрать амулет: {error}"));
+                    }
+                }
+                return;
+            }
+            Some(AutomationPhase::InsertItem) => {
+                let Some(item) = self.current_item.clone() else {
+                    self.stop_automation("Текущий предмет не задан.");
+                    return;
+                };
+                let x = item.rect.x + item.rect.width / 2;
+                let y = item.rect.y + item.rect.height / 2;
+                match right_click_window_point(handle, x, y) {
+                    Ok(()) => {
+                        self.log(format!(
+                            "[automation] right-click item r{}c{} score={:.3} at ({x},{y})",
+                            item.row + 1,
+                            item.col + 1,
+                            item.score
+                        ));
+                        self.automation_phase = Some(AutomationPhase::WaitingForStart);
+                        self.phase_started = Instant::now();
+                        self.consecutive_matches = 0;
+                        self.next_automation_poll = Instant::now() + Duration::from_millis(420);
+                        self.status = "Ожидание появления и активации кнопки «Начать».".into();
+                    }
+                    Err(error) => {
+                        self.stop_automation(&format!("Не удалось выбрать предмет: {error}"));
+                    }
+                }
+                return;
+            }
+            Some(AutomationPhase::ReconcileInventory) => {
+                let current_item = self.current_item.clone();
+                if let Err(error) = self.scan_inventory_snapshot(ctx, &frame, false) {
+                    self.stop_automation(&format!(
+                        "Не удалось обновить таблицу инвентаря после OK: {error}"
+                    ));
+                    return;
+                }
+
+                if let Some(previous) = current_item {
+                    if let Some(updated) = self
+                        .logical_inventory
+                        .iter()
+                        .find(|cell| cell.row == previous.row && cell.col == previous.col)
+                    {
+                        if updated.kind == CellKind::Empty {
+                            self.log(format!(
+                                "[automation] current item r{}c{} is now empty (possibly destroyed); removed from the available queue",
+                                previous.row + 1,
+                                previous.col + 1
+                            ));
+                        } else if updated.kind == CellKind::Occupied {
+                            self.log(format!(
+                                "[automation] current item r{}c{} remains in inventory; it is marked attempted and will not be clicked again",
+                                previous.row + 1,
+                                previous.col + 1
+                            ));
+                        }
+                    }
+                }
+
+                if self.completed_runs >= self.runs {
+                    self.automation_phase = None;
+                    self.current_item = None;
+                    self.run_state = RunState::Stopped;
+                    self.status = format!(
+                        "Серия завершена: выполнено {} из {} прогонов. Инвентарь повторно просканирован.",
+                        self.completed_runs, self.runs
+                    );
+                    self.log("[automation] requested run count reached after inventory reconciliation");
+                    return;
+                }
+
+                let Some(next_item) = self.next_unattempted_item() else {
+                    self.automation_phase = None;
+                    self.current_item = None;
+                    self.run_state = RunState::Stopped;
+                    self.status = format!(
+                        "Остановлено: доступные предметы закончились. Выполнено {} из {} прогонов.",
+                        self.completed_runs, self.runs
+                    );
+                    self.log("[automation] no unattempted occupied inventory slots remain");
+                    return;
+                };
+
+                self.current_item = Some(next_item.clone());
+                self.automation_phase = Some(AutomationPhase::InsertAmulet);
+                self.phase_started = Instant::now();
+                self.next_automation_poll = Instant::now() + Duration::from_millis(450);
+                self.consecutive_matches = 0;
+                self.status = format!(
+                    "Таблица обновлена. Следующий предмет: r{}c{} (прогон {} из {}).",
+                    next_item.row + 1,
+                    next_item.col + 1,
+                    self.completed_runs + 1,
+                    self.runs
+                );
+                return;
+            }
+            Some(AutomationPhase::WaitingForStart)
+            | Some(AutomationPhase::WaitingForOk) => {}
+            None => return,
+        }
+
+        let phase = self.automation_phase;
+        let timeout = match phase {
+            Some(AutomationPhase::WaitingForStart) => Duration::from_secs(45),
+            Some(AutomationPhase::WaitingForOk) => Duration::from_secs(180),
+            _ => Duration::from_secs(30),
+        };
+        if now.duration_since(self.phase_started) > timeout {
+            let message = match phase {
+                Some(AutomationPhase::WaitingForStart) => {
+                    "Тайм-аут: кнопка «Начать» не появилась или осталась неактивной."
+                }
+                Some(AutomationPhase::WaitingForOk) => {
+                    "Тайм-аут: окно не показало распознаваемую кнопку OK."
+                }
+                _ => "Тайм-аут этапа автоматизации.",
+            };
+            self.stop_automation(message);
+            return;
+        }
+
         let analysis = match analyze_enchant_window(&frame, &self.enchant) {
             Ok(analysis) => analysis,
             Err(error) => {
@@ -333,27 +648,36 @@ impl EnchantmentHelperApp {
                 return;
             }
         };
-
         self.set_preview(ctx, &analysis.overlay);
+
         if let Some(button) = &analysis.start_button {
             self.summary = format!(
-                "Start: {} · синяя область {:.0}% · OK score {:.3} · прогон {}/{}",
+                "START: {} · синий {:.0}% · OK {:.3} · предмет r{}c{} · прогон {}/{}",
                 if button.active { "активна" } else { "неактивна" },
                 button.blue_ratio * 100.0,
                 analysis.ok_button.score,
+                self.current_item.as_ref().map_or(0, |item| item.row + 1),
+                self.current_item.as_ref().map_or(0, |item| item.col + 1),
                 self.completed_runs.saturating_add(1).min(self.runs),
                 self.runs
             );
+            if self.last_wait_log.elapsed() >= Duration::from_secs(10) {
+                self.log(format!(
+                    "[automation] Start template matched at ({},{},{},{}) active={} blue_ratio={:.3}",
+                    button.rect.x, button.rect.y, button.rect.width, button.rect.height,
+                    button.active, button.blue_ratio
+                ));
+            }
         } else {
             self.summary = format!(
-                "Start не найдена · OK score {:.3} · прогон {}/{}",
+                "START не найдена · OK {:.3} · прогон {}/{}",
                 analysis.ok_button.score,
                 self.completed_runs.saturating_add(1).min(self.runs),
                 self.runs
             );
         }
 
-        match self.automation_phase {
+        match phase {
             Some(AutomationPhase::WaitingForStart) => {
                 if analysis.start_button.as_ref().is_some_and(|button| button.active) {
                     self.consecutive_matches = self.consecutive_matches.saturating_add(1);
@@ -375,11 +699,13 @@ impl EnchantmentHelperApp {
                     match click_window_point(handle, x, y) {
                         Ok(()) => {
                             self.log(format!(
-                                "[automation] clicked START at ({x}, {y}); waiting for OK"
+                                "[automation] START found and clicked at ({x}, {y}) using template"
                             ));
                             self.automation_phase = Some(AutomationPhase::WaitingForOk);
+                            self.phase_started = Instant::now();
                             self.consecutive_matches = 0;
-                            self.next_automation_poll = Instant::now() + Duration::from_millis(500);
+                            self.next_automation_poll =
+                                Instant::now() + Duration::from_millis(550);
                             self.status = format!(
                                 "Прогон {}: зачарование запущено; ожидание кнопки OK.",
                                 self.completed_runs + 1
@@ -391,7 +717,7 @@ impl EnchantmentHelperApp {
                     }
                 } else if now.duration_since(self.last_wait_log) >= Duration::from_secs(10) {
                     self.last_wait_log = now;
-                    self.log("[automation] waiting for active blue START button (ROI only)");
+                    self.log("[automation] waiting for stable blue Start-button match");
                 }
             }
             Some(AutomationPhase::WaitingForOk) => {
@@ -415,28 +741,19 @@ impl EnchantmentHelperApp {
                     match click_window_point(handle, x, y) {
                         Ok(()) => {
                             self.completed_runs = self.completed_runs.saturating_add(1);
+                            if let Some(item) = &self.current_item {
+                                self.attempted_items.insert((item.row, item.col));
+                            }
                             self.log(format!(
                                 "[automation] clicked OK at ({x}, {y}); completed {}/{}",
                                 self.completed_runs, self.runs
                             ));
                             self.consecutive_matches = 0;
-                            if self.completed_runs >= self.runs {
-                                self.automation_phase = None;
-                                self.run_state = RunState::Stopped;
-                                self.status = format!(
-                                    "Серия завершена: выполнено {} из {} прогонов.",
-                                    self.completed_runs, self.runs
-                                );
-                            } else {
-                                self.automation_phase = Some(AutomationPhase::WaitingForStart);
-                                self.next_automation_poll =
-                                    Instant::now() + Duration::from_millis(650);
-                                self.status = format!(
-                                    "OK подтверждена. Ожидание кнопки «Начать» для прогона {} из {}.",
-                                    self.completed_runs + 1,
-                                    self.runs
-                                );
-                            }
+                            self.automation_phase = Some(AutomationPhase::ReconcileInventory);
+                            self.phase_started = Instant::now();
+                            self.next_automation_poll =
+                                Instant::now() + Duration::from_millis(750);
+                            self.status = "OK подтверждена. Повторное сканирование инвентаря и обновление логической таблицы.".into();
                         }
                         Err(error) => {
                             self.stop_automation(&format!("Клик по OK не выполнен: {error}"));
@@ -447,12 +764,26 @@ impl EnchantmentHelperApp {
                     self.log("[automation] waiting for stable OK template match");
                 }
             }
-            None => {}
+            _ => {}
         }
     }
 
     fn inventory_ui(&mut self, ui: &mut egui::Ui) {
         let config = &mut self.inventory;
+        if self.inventory_grid_region.is_configured() {
+            ui.label(format!(
+                "Область сетки: ({}, {}) · {}×{} px",
+                self.inventory_grid_region.x,
+                self.inventory_grid_region.y,
+                self.inventory_grid_region.width,
+                self.inventory_grid_region.height
+            ));
+        } else {
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                "Область сетки не задана: выделите всю сетку на превью игрового окна.",
+            );
+        }
         egui::Grid::new("grid_cfg").num_columns(4).show(ui, |ui| {
             ui.label("X");
             ui.add(egui::DragValue::new(&mut config.origin_x).range(0..=3000));
@@ -615,12 +946,23 @@ impl EnchantmentHelperApp {
         }
 
         ui.horizontal(|ui| {
-            ui.label("Кнопка START находится шаблоном автоматически. Ручную область можно задать как альтернативу:");
-            ui.checkbox(&mut self.select_start_region, "Выделить область");
+            let start_changed = ui
+                .checkbox(&mut self.select_start_region, "Ручная область START")
+                .changed();
+            if start_changed && self.select_start_region {
+                self.select_inventory_region = false;
+            }
+            let inventory_changed = ui
+                .checkbox(&mut self.select_inventory_region, "Область сетки инвентаря")
+                .changed();
+            if inventory_changed && self.select_inventory_region {
+                self.select_start_region = false;
+            }
             if ui.button("Обновить кадр").clicked() {
                 self.capture_selected_preview(ctx);
             }
         });
+        ui.small("START ищется по шаблону автоматически. Для инвентаря один раз выделите всю сетку от первой до последней ячейки.");
 
         if let Some(handle) = self.selected_window {
             if let Some(texture) = self.window_previews.get(&handle) {
@@ -631,22 +973,27 @@ impl EnchantmentHelperApp {
                 let image_size = raw_size * scale;
                 let response = ui.add(
                     egui::Image::new((texture.id(), image_size))
-                        .sense(if self.select_start_region {
+                        .sense(if self.select_start_region || self.select_inventory_region {
                             egui::Sense::click_and_drag()
                         } else {
                             egui::Sense::hover()
                         }),
                 );
 
-                if self.select_start_region && response.drag_started() {
+                if (self.select_start_region || self.select_inventory_region)
+                    && response.drag_started()
+                {
                     self.region_drag_start = response.interact_pointer_pos();
                 }
-                if self.select_start_region && response.dragged() {
-                    if self.region_drag_start.is_none() {
-                        self.region_drag_start = response.interact_pointer_pos();
-                    }
+                if (self.select_start_region || self.select_inventory_region)
+                    && response.dragged()
+                    && self.region_drag_start.is_none()
+                {
+                    self.region_drag_start = response.interact_pointer_pos();
                 }
-                if self.select_start_region && response.drag_stopped() {
+                if (self.select_start_region || self.select_inventory_region)
+                    && response.drag_stopped()
+                {
                     let start = self.region_drag_start.take();
                     let end = response
                         .interact_pointer_pos()
@@ -670,46 +1017,95 @@ impl EnchantmentHelperApp {
                         let (x1, y1) = to_image(egui::pos2(start.x.min(end.x), start.y.min(end.y)));
                         let (x2, y2) = to_image(egui::pos2(start.x.max(end.x), start.y.max(end.y)));
                         if x2 - x1 >= 12 && y2 - y1 >= 8 {
-                            self.enchant.start_button_region = Region {
-                                x: x1,
-                                y: y1,
-                                width: x2 - x1,
-                                height: y2 - y1,
-                            };
-                            self.mode = Mode::Enchant;
-                            self.select_start_region = false;
-                            self.status = "Ручная область кнопки START сохранена; автоматический шаблонный поиск отключён до сброса области.".into();
-                            self.log(format!(
-                                "[ui] START ROI set to ({x1}, {y1}, {}, {})",
-                                x2 - x1,
-                                y2 - y1
-                            ));
+                            if self.select_inventory_region {
+                                let width = x2 - x1;
+                                let height = y2 - y1;
+                                let columns = f64::from(self.inventory.columns.max(1));
+                                let rows = f64::from(self.inventory.rows.max(1));
+                                // The drag rectangle encloses the outer bounds of all cells.
+                                // Existing scanner geometry uses cells at 90% of the grid step.
+                                let step_x = (f64::from(width) / (columns - 1.0 + 0.9))
+                                    .round() as i32;
+                                let step_y = (f64::from(height) / (rows - 1.0 + 0.9))
+                                    .round() as i32;
+                                self.inventory.origin_x = x1;
+                                self.inventory.origin_y = y1;
+                                self.inventory.step_x = step_x.max(8);
+                                self.inventory.step_y = step_y.max(8);
+                                self.inventory.cell_width =
+                                    ((f64::from(self.inventory.step_x) * 0.9).round() as i32)
+                                        .clamp(8, self.inventory.step_x);
+                                self.inventory.cell_height =
+                                    ((f64::from(self.inventory.step_y) * 0.9).round() as i32)
+                                        .clamp(8, self.inventory.step_y);
+                                self.inventory_grid_region = Region {
+                                    x: x1,
+                                    y: y1,
+                                    width,
+                                    height,
+                                };
+                                self.select_inventory_region = false;
+                                self.mode = Mode::Inventory;
+                                self.status = format!(
+                                    "Сетка инвентаря откалибрована: {}×{}; шаг {}×{} px.",
+                                    self.inventory.columns,
+                                    self.inventory.rows,
+                                    self.inventory.step_x,
+                                    self.inventory.step_y
+                                );
+                                self.log(format!(
+                                    "[ui] inventory grid ROI=({x1},{y1},{width},{height}) step={}x{} cell={}x{}",
+                                    self.inventory.step_x,
+                                    self.inventory.step_y,
+                                    self.inventory.cell_width,
+                                    self.inventory.cell_height
+                                ));
+                            } else if self.select_start_region {
+                                self.enchant.start_button_region = Region {
+                                    x: x1,
+                                    y: y1,
+                                    width: x2 - x1,
+                                    height: y2 - y1,
+                                };
+                                self.mode = Mode::Enchant;
+                                self.select_start_region = false;
+                                self.status = "Ручная область кнопки START сохранена; для возврата к поиску по обученному шаблону сбросьте ROI.".into();
+                                self.log(format!(
+                                    "[ui] manual START ROI=({x1},{y1},{},{})",
+                                    x2 - x1,
+                                    y2 - y1
+                                ));
+                            }
                         } else {
-                            self.status = "Область слишком мала. Выделите кнопку целиком.".into();
+                            self.status = "Область слишком мала. Выделите прямоугольник целиком.".into();
                         }
                     }
                 }
-                let roi = self.enchant.start_button_region;
-                if roi.is_configured() && raw_size.x > 0.0 && raw_size.y > 0.0 {
+                let draw_region = |region: Region, color: egui::Color32| {
+                    if !region.is_configured() || raw_size.x <= 0.0 || raw_size.y <= 0.0 {
+                        return;
+                    }
                     let min = egui::pos2(
                         response.rect.left()
-                            + (roi.x as f32 / raw_size.x) * response.rect.width(),
+                            + (region.x as f32 / raw_size.x) * response.rect.width(),
                         response.rect.top()
-                            + (roi.y as f32 / raw_size.y) * response.rect.height(),
+                            + (region.y as f32 / raw_size.y) * response.rect.height(),
                     );
                     let max = egui::pos2(
                         response.rect.left()
-                            + ((roi.x + roi.width) as f32 / raw_size.x) * response.rect.width(),
+                            + ((region.x + region.width) as f32 / raw_size.x) * response.rect.width(),
                         response.rect.top()
-                            + ((roi.y + roi.height) as f32 / raw_size.y) * response.rect.height(),
+                            + ((region.y + region.height) as f32 / raw_size.y) * response.rect.height(),
                     );
-                    let stroke = egui::Stroke::new(2.0, egui::Color32::GREEN);
+                    let stroke = egui::Stroke::new(2.0, color);
                     let painter = ui.painter();
                     painter.line_segment([min, egui::pos2(max.x, min.y)], stroke);
                     painter.line_segment([egui::pos2(max.x, min.y), max], stroke);
                     painter.line_segment([max, egui::pos2(min.x, max.y)], stroke);
                     painter.line_segment([egui::pos2(min.x, max.y), min], stroke);
-                }
+                };
+                draw_region(self.inventory_grid_region, egui::Color32::LIGHT_BLUE);
+                draw_region(self.enchant.start_button_region, egui::Color32::GREEN);
                 ui.small(format!(
                     "Размер кадра: {}×{} px · координаты ROI задаются в пикселях исходного окна",
                     raw_size.x as u32, raw_size.y as u32
@@ -797,7 +1193,7 @@ impl eframe::App for EnchantmentHelperApp {
                             )
                             .clicked()
                         {
-                            self.start_automation();
+                            self.start_automation(ctx);
                         }
                         if ui
                             .add_enabled(
