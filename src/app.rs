@@ -1633,7 +1633,7 @@ impl eframe::App for EnchantmentHelperApp {
                             .clicked()
                         {
                             if let Some(paused_at) = self.paused_at.take() {
-                                self.phase_started += paused_at.elapsed();
+                                self.phase_started = self.phase_started + paused_at.elapsed();
                             }
                             self.run_state = RunState::Running;
                             self.next_automation_poll = Instant::now();
