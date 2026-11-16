@@ -23,3 +23,6 @@ windows-sys = { version = "0.59.0", features = [
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[build-dependencies]
+embed-manifest = "1.4.0"

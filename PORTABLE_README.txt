@@ -1,23 +1,23 @@
-JD ENCHANTMENT HELPER - PORTABLE VERSION
-========================================
+ПОМОЩНИК ЗАЧАРОВАНИЯ JADE DYNASTY — ПЕРЕНОСИМАЯ ВЕРСИЯ
+======================================================
 
-Run:
-  Double-click run.bat
-  or double-click jd-enchantment-helper.exe
+Запуск:
+  Дважды щёлкните run.bat
+  или jd-enchantment-helper.exe
 
-This package is built for 64-bit Windows 10/11.
+Требуется 64-разрядная Windows 10/11.
 
-OpenCV and its native dependencies are statically linked into the executable.
-The MSVC C/C++ runtime is also statically linked.
+При запуске Windows покажет запрос UAC. Приложению нужны права администратора для отправки ввода мыши в игровое окно.
 
-On the destination PC you do NOT need:
-- OpenCV DLL files
+OpenCV и его нативные зависимости статически встроены в EXE.
+Среда выполнения MSVC также статически встроена.
+
+На целевом компьютере НЕ нужны:
+- DLL-файлы OpenCV
 - vcpkg
-- Rust or Cargo
+- Rust или Cargo
 - LLVM / Clang
 - Visual Studio Build Tools
-- a separate Visual C++ Redistributable installation
+- отдельная установка Visual C++ Redistributable
 
-Keep the executable and run.bat in the same folder.
-
-The portable package is created by scripts\build-test.bat on the build PC.
+Храните EXE и run.bat в одной папке.

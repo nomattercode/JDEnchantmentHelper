@@ -4,15 +4,18 @@ mod platform;
 mod vision;
 
 fn main() -> eframe::Result<()> {
+    let window_size = [980.0, 780.0];
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([1040.0, 820.0])
-            .with_min_inner_size([820.0, 640.0]),
+            .with_title("Помощник зачарования Jade Dynasty")
+            .with_inner_size(window_size)
+            .with_min_inner_size(window_size)
+            .with_resizable(false),
         ..Default::default()
     };
 
     eframe::run_native(
-        "JD Enchantment Helper",
+        "Помощник зачарования Jade Dynasty",
         options,
         Box::new(|_creation_context| Ok(Box::new(app::EnchantmentHelperApp::default()))),
     )

@@ -67,11 +67,11 @@ pub enum CellKind { Amulet, BeforeStart, Occupied, Empty, OutOfFrame }
 impl CellKind {
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Amulet => "AMULET",
-            Self::BeforeStart => "SKIP",
-            Self::Occupied => "ITEM",
-            Self::Empty => "EMPTY",
-            Self::OutOfFrame => "OUT",
+            Self::Amulet => "АМУЛЕТ",
+            Self::BeforeStart => "ПРОПУСК",
+            Self::Occupied => "ПРЕДМЕТ",
+            Self::Empty => "ПУСТО",
+            Self::OutOfFrame => "ВНЕ КАДРА",
         }
     }
 
