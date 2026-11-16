@@ -357,26 +357,6 @@ impl EnchantmentHelperApp {
             .map_err(|error| format!("Не удалось просканировать инвентарь: {error}"))?;
         validate_inventory_scan(&scan, self.inventory_grid_region, frame)?;
 
-        let amulet = scan
-            .cells
-            .iter()
-            .find(|cell| {
-                cell.row == self.inventory.amulet_row
-                    && cell.col == self.inventory.amulet_col
-            })
-            .cloned()
-            .ok_or_else(|| "Ячейка амулета не входит в область инвентаря.".to_string())?;
-
-        if amulet.score < self.inventory.threshold {
-            return Err(format!(
-                "Амулет не распознан в ячейке {}:{} (оценка {:.3}, порог {:.3}).",
-                amulet.row + 1,
-                amulet.col + 1,
-                amulet.score,
-                self.inventory.threshold
-            ));
-        }
-
         let previous = self.logical_inventory.clone();
         for old in &previous {
             if old.kind != CellKind::Occupied {
@@ -393,18 +373,13 @@ impl EnchantmentHelperApp {
                         old.row + 1,
                         old.col + 1
                     ));
-                } else if updated.kind == CellKind::OutOfFrame {
-                    self.log(format!(
-                        "[inventory][table] slot r{}c{} is outside the captured frame; it will not be clicked",
-                        old.row + 1,
-                        old.col + 1
-                    ));
                 }
             }
         }
 
+        // Publish the new table and diagnostic overlay before validating the
+        // configured amulet cell, so the user can inspect a failed scan safely.
         self.logical_inventory = scan.cells.clone();
-        self.amulet_slot = Some(amulet);
         for line in &scan.log {
             self.log(line.clone());
         }
@@ -414,31 +389,62 @@ impl EnchantmentHelperApp {
             .iter()
             .filter(|cell| cell.kind == CellKind::Occupied)
             .count();
-        self.summary = format!(
-            "Логическая таблица: {} ячеек · предметов: {} · попыток: {}",
-            self.logical_inventory.len(),
-            candidate_count,
-            self.completed_runs
-        );
-
         self.save_debug("inventory_live_overlay.png", &scan.overlay);
         self.save_debug("inventory_live_score_map.png", &scan.score_map);
         self.set_preview(ctx, &scan.overlay);
 
+        let amulet = scan.cells.iter().find(|cell| {
+            cell.row == self.inventory.amulet_row && cell.col == self.inventory.amulet_col
+        });
+        let amulet_error = match amulet {
+            Some(cell) if cell.score >= self.inventory.threshold => {
+                self.amulet_slot = Some(cell.clone());
+                None
+            }
+            Some(cell) => {
+                self.amulet_slot = None;
+                Some(format!(
+                    "Амулет не распознан в ячейке {}:{} (оценка {:.3}, порог {:.3}).",
+                    cell.row + 1,
+                    cell.col + 1,
+                    cell.score,
+                    self.inventory.threshold
+                ))
+            }
+            None => {
+                self.amulet_slot = None;
+                Some("Ячейка амулета не входит в область инвентаря. Проверьте строку и столбец.".into())
+            }
+        };
+
+        self.summary = format!(
+            "Логическая таблица: {} ячеек · предметов: {} · амулет: {} · попыток: {}",
+            self.logical_inventory.len(),
+            candidate_count,
+            if self.amulet_slot.is_some() { "найден" } else { "не подтверждён" },
+            self.completed_runs
+        );
+
         if initial {
             self.log(format!(
-                "[inventory][table] initialized: cells={} items={} amulet=r{}c{}",
+                "[inventory][table] initialized: cells={} items={} amulet=r{}c{} valid={}",
                 self.logical_inventory.len(),
                 candidate_count,
                 self.inventory.amulet_row + 1,
-                self.inventory.amulet_col + 1
+                self.inventory.amulet_col + 1,
+                self.amulet_slot.is_some()
             ));
         } else {
             self.log(format!(
-                "[inventory][table] refreshed after OK: items currently detected={candidate_count}"
+                "[inventory][table] refreshed after OK: items currently detected={candidate_count} amulet_valid={}",
+                self.amulet_slot.is_some()
             ));
         }
-        Ok(())
+
+        match amulet_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     fn scan_inventory_manually(&mut self, ctx: &egui::Context) {
@@ -1104,8 +1110,13 @@ impl EnchantmentHelperApp {
                             .find(|cell| cell.row == row && cell.col == col);
 
                         let (symbol, color, hint) = match cell {
+                            Some(cell)
+                                if cell.kind == CellKind::Amulet && self.amulet_slot.is_some() =>
+                            {
+                                ("A", egui::Color32::YELLOW, "Амулет распознан")
+                            }
                             Some(cell) if cell.kind == CellKind::Amulet => {
-                                ("A", egui::Color32::YELLOW, "Амулет")
+                                ("!", egui::Color32::LIGHT_RED, "Амулет не подтверждён по порогу. Проверьте координаты и оценку")
                             }
                             Some(cell) if cell.kind == CellKind::Occupied
                                 && self.attempted_items.contains(&(row, col)) =>
