@@ -1,5 +1,5 @@
 use opencv::{
-    core::{self, Mat, Point, Rect, Scalar, Size, Vector},
+    core::{self, Mat, Point, Rect, Scalar, Size},
     imgproc,
     prelude::*,
 };
