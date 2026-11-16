@@ -29,15 +29,15 @@ pub struct GameWindow {
     pub height: u32,
 }
 
-pub const MAX_RUNS: u8 = 10;
+pub const MAX_PASSES: u8 = 10;
 
 #[cfg(test)]
 mod tests {
-    use super::{RunState, MAX_RUNS};
+    use super::{RunState, MAX_PASSES};
 
     #[test]
-    fn run_limit_is_ten() {
-        assert_eq!(MAX_RUNS, 10);
+    fn pass_limit_is_ten() {
+        assert_eq!(MAX_PASSES, 10);
     }
 
     #[test]
