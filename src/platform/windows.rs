@@ -5,7 +5,7 @@ use opencv::{
 };
 use std::{thread, time::Duration};
 use windows_sys::Win32::{
-    Foundation::{HWND, RECT},
+    Foundation::{HWND, POINT, RECT},
     Graphics::Gdi::{
         BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits,
         GetWindowDC, ReleaseDC, SelectObject, BITMAPINFO, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC,
@@ -15,10 +15,10 @@ use windows_sys::Win32::{
     UI::{
         Input::KeyboardAndMouse::{
             GetAsyncKeyState, mouse_event, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-            MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, VK_F12,
+            MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, VK_F12,
         },
         WindowsAndMessaging::{
-            EnumWindows, GetForegroundWindow, GetWindowRect, GetWindowTextLengthW,
+            EnumWindows, GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowTextLengthW,
             GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
             SetForegroundWindow, SetCursorPos,
         },
@@ -229,6 +229,60 @@ pub fn click_window_point(handle: isize, x: i32, y: i32) -> Result<(), String> {
 /// Sends a right click to a point relative to the selected top-level window.
 pub fn right_click_window_point(handle: isize, x: i32, y: i32) -> Result<(), String> {
     click_window_point_with_flags(handle, x, y, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP)
+}
+
+/// Sends one vertical wheel notch over a point in the selected game window.
+/// Positive delta scrolls up; negative delta scrolls down.
+pub fn scroll_window(handle: isize, x: i32, y: i32, wheel_delta: i32) -> Result<(), String> {
+    if wheel_delta != 120 && wheel_delta != -120 {
+        return Err("Прокрутка должна составлять ровно одну страницу вверх или вниз.".into());
+    }
+
+    let hwnd = handle as HWND;
+    if unsafe { IsWindow(hwnd) } == 0 {
+        return Err("Выбранное игровое окно закрыто.".into());
+    }
+    if unsafe { IsIconic(hwnd) } != 0 {
+        return Err("Игровое окно свёрнуто. Разверните его перед прокруткой.".into());
+    }
+
+    unsafe { SetForegroundWindow(hwnd); }
+    thread::sleep(Duration::from_millis(120));
+    if unsafe { GetForegroundWindow() } != hwnd {
+        return Err("Не удалось передать фокус игровому окну для прокрутки.".into());
+    }
+
+    let mut bounds = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    if unsafe { GetWindowRect(hwnd, &mut bounds) } == 0 {
+        return Err("Не удалось получить координаты игрового окна.".into());
+    }
+    let width = bounds.right - bounds.left;
+    let height = bounds.bottom - bounds.top;
+    if x < 0 || y < 0 || x >= width || y >= height {
+        return Err(format!(
+            "Точка прокрутки ({x}, {y}) выходит за границы игрового окна {width}×{height}."
+        ));
+    }
+
+    let mut previous_cursor = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut previous_cursor) } == 0 {
+        return Err("Не удалось сохранить положение курсора перед прокруткой.".into());
+    }
+    if f12_pressed() {
+        return Err("Аварийная остановка F12 перед прокруткой.".into());
+    }
+    if unsafe { SetCursorPos(bounds.left + x, bounds.top + y) } == 0 {
+        return Err("Не удалось переместить курсор в область инвентаря.".into());
+    }
+
+    unsafe { mouse_event(MOUSEEVENTF_WHEEL, 0, 0, wheel_delta as u32, 0); }
+    thread::sleep(Duration::from_millis(35));
+    unsafe { SetCursorPos(previous_cursor.x, previous_cursor.y); }
+
+    if f12_pressed() {
+        return Err("Аварийная остановка F12 во время прокрутки.".into());
+    }
+    Ok(())
 }
 
 fn click_window_point_with_flags(
