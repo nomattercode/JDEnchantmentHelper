@@ -16,6 +16,13 @@ use crate::vision::{
     EnchantDetectorConfig, InventoryConfig, Region,
 };
 
+fn same_detection_region(left: Region, right: Region) -> bool {
+    left.x.abs_diff(right.x) <= 3
+        && left.y.abs_diff(right.y) <= 3
+        && left.width.abs_diff(right.width) <= 3
+        && left.height.abs_diff(right.height) <= 3
+}
+
 fn validate_inventory_scan(
     scan: &InventoryScan,
     region: Region,
@@ -97,6 +104,7 @@ pub struct EnchantmentHelperApp {
     run_state: RunState,
     automation_phase: Option<AutomationPhase>,
     consecutive_matches: u8,
+    last_detection: Option<Region>,
     next_automation_poll: Instant,
     last_wait_log: Instant,
     phase_started: Instant,
@@ -137,6 +145,7 @@ impl Default for EnchantmentHelperApp {
             run_state: RunState::Idle,
             automation_phase: None,
             consecutive_matches: 0,
+            last_detection: None,
             next_automation_poll: Instant::now(),
             last_wait_log: Instant::now(),
             phase_started: Instant::now(),
@@ -167,6 +176,28 @@ impl Default for EnchantmentHelperApp {
 }
 
 impl EnchantmentHelperApp {
+    fn reset_detection_streak(&mut self) {
+        self.consecutive_matches = 0;
+        self.last_detection = None;
+    }
+
+    fn update_detection_streak(&mut self, current: Option<Region>) -> bool {
+        if let Some(current) = current {
+            let same_location = self
+                .last_detection
+                .is_some_and(|previous| same_detection_region(previous, current));
+            if same_location {
+                self.consecutive_matches = self.consecutive_matches.saturating_add(1);
+            } else {
+                self.consecutive_matches = 1;
+            }
+            self.last_detection = Some(current);
+        } else {
+            self.reset_detection_streak();
+        }
+        self.consecutive_matches >= 2
+    }
+
     fn log(&mut self, line: impl Into<String>) {
         self.logs.push(line.into());
         if self.logs.len() > 400 {
@@ -526,6 +557,7 @@ impl EnchantmentHelperApp {
 
         self.completed_runs = 0;
         self.paused_at = None;
+        self.reset_detection_streak();
         self.attempted_items.clear();
         self.current_item = None;
         self.amulet_slot = None;
@@ -575,7 +607,7 @@ impl EnchantmentHelperApp {
             || matches!(self.run_state, RunState::Running | RunState::Paused);
         self.automation_phase = None;
         self.paused_at = None;
-        self.consecutive_matches = 0;
+        self.reset_detection_streak();
         self.run_state = RunState::Stopped;
         self.status = reason.into();
         if was_active {
@@ -652,6 +684,7 @@ impl EnchantmentHelperApp {
                         rect.x, rect.y, rect.width, rect.height
                     ));
                     self.automation_phase = Some(AutomationPhase::InsertAmulet);
+                    self.reset_detection_streak();
                     self.phase_started = Instant::now();
                     self.next_automation_poll = Instant::now() + Duration::from_millis(350);
                     self.status = "Окно зачарования найдено. Выбор амулета.".into();
@@ -711,6 +744,7 @@ impl EnchantmentHelperApp {
                             verified.score
                         ));
                         self.automation_phase = Some(AutomationPhase::InsertItem);
+                        self.reset_detection_streak();
                         self.phase_started = Instant::now();
                         self.next_automation_poll = Instant::now() + Duration::from_millis(420);
                         self.status = "Амулет перепроверен и выбран. Перенос предмета в окно зачарования.".into();
@@ -781,8 +815,8 @@ impl EnchantmentHelperApp {
                             verified.score
                         ));
                         self.automation_phase = Some(AutomationPhase::WaitingForStart);
+                        self.reset_detection_streak();
                         self.phase_started = Instant::now();
-                        self.consecutive_matches = 0;
                         self.next_automation_poll = Instant::now() + Duration::from_millis(420);
                         self.status = "Предмет перепроверен и выбран. Ожидание появления и активации кнопки «Начать».".into();
                     }
@@ -1005,19 +1039,21 @@ impl EnchantmentHelperApp {
 
         match phase {
             Some(AutomationPhase::WaitingForStart) => {
-                if analysis.start_button.as_ref().is_some_and(|button| button.active) {
-                    self.consecutive_matches = self.consecutive_matches.saturating_add(1);
-                } else {
-                    self.consecutive_matches = 0;
-                }
-
-                if self.consecutive_matches >= 2 {
+                let current_start = analysis.start_button.as_ref()
+                    .filter(|button| button.active)
+                    .map(|button| Region {
+                        x: button.rect.x,
+                        y: button.rect.y,
+                        width: button.rect.width,
+                        height: button.rect.height,
+                    });
+                if self.update_detection_streak(current_start) {
                     if f12_pressed() {
                         self.stop_automation("Аварийная остановка: нажата F12.");
                         return;
                     }
                     let Some(button) = analysis.start_button else {
-                        self.consecutive_matches = 0;
+                        self.reset_detection_streak();
                         return;
                     };
                     let x = button.rect.x + button.rect.width / 2;
@@ -1028,8 +1064,8 @@ impl EnchantmentHelperApp {
                                 "[automation] START found and clicked at ({x}, {y}) using template"
                             ));
                             self.automation_phase = Some(AutomationPhase::WaitingForOk);
+                            self.reset_detection_streak();
                             self.phase_started = Instant::now();
-                            self.consecutive_matches = 0;
                             self.next_automation_poll =
                                 Instant::now() + Duration::from_millis(550);
                             self.status = format!(
@@ -1047,19 +1083,23 @@ impl EnchantmentHelperApp {
                 }
             }
             Some(AutomationPhase::WaitingForOk) => {
-                if analysis.ok_button.found {
-                    self.consecutive_matches = self.consecutive_matches.saturating_add(1);
+                let current_ok = if analysis.ok_button.found {
+                    analysis.ok_button.rect.map(|rect| Region {
+                        x: rect.x,
+                        y: rect.y,
+                        width: rect.width,
+                        height: rect.height,
+                    })
                 } else {
-                    self.consecutive_matches = 0;
-                }
-
-                if self.consecutive_matches >= 2 {
+                    None
+                };
+                if self.update_detection_streak(current_ok) {
                     if f12_pressed() {
                         self.stop_automation("Аварийная остановка: нажата F12.");
                         return;
                     }
                     let Some(rect) = analysis.ok_button.rect else {
-                        self.consecutive_matches = 0;
+                        self.reset_detection_streak();
                         return;
                     };
                     let x = rect.x + rect.width / 2;
@@ -1074,7 +1114,7 @@ impl EnchantmentHelperApp {
                                 "[automation] clicked OK at ({x}, {y}); completed {}/{}",
                                 self.completed_runs, self.runs
                             ));
-                            self.consecutive_matches = 0;
+                            self.reset_detection_streak();
                             self.automation_phase = Some(AutomationPhase::ReconcileInventory);
                             self.phase_started = Instant::now();
                             self.next_automation_poll =
@@ -1752,5 +1792,17 @@ impl eframe::App for EnchantmentHelperApp {
         } else if self.selected_window.is_some() {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
+    }
+}
+
+#[cfg(test)]
+mod detection_tests {
+    #[test]
+    fn detection_streak_requires_the_same_button_location() {
+        let first = super::Region { x: 10, y: 20, width: 82, height: 42 };
+        let jittered = super::Region { x: 12, y: 19, width: 82, height: 42 };
+        let different = super::Region { x: 80, y: 20, width: 82, height: 42 };
+        assert!(super::same_detection_region(first, jittered));
+        assert!(!super::same_detection_region(first, different));
     }
 }
