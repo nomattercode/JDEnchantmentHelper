@@ -8,6 +8,9 @@ use crate::vision::image_io::decode_image;
 
 const OK_BUTTON_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_button.png");
 const OK_BUTTON_THRESHOLD: f64 = 0.86;
+const OK_BUTTON_SCALE_MIN: f64 = 0.65;
+const OK_BUTTON_SCALE_MAX: f64 = 1.45;
+const OK_BUTTON_SCALE_STEP: f64 = 0.05;
 const START_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/start_button_active.png");
 const ENCHANT_HEADER_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/enchant_header.png");
 
@@ -184,6 +187,32 @@ fn centered_result_region(frame: &Mat) -> Rect {
     )
 }
 
+/// Detect the same OK button in any bounded area, regardless of whether
+/// the result popup replaced the enchant dialog. The wider scale range helps
+/// when Windows display scaling differs between computers.
+fn find_ok_button(
+    frame: &Mat,
+    search_rect: Rect,
+    cfg: &EnchantDetectorConfig,
+) -> opencv::Result<MatchResult> {
+    let search = Mat::roi(frame, search_rect)?.try_clone()?;
+    let source = grayscale(&search)?;
+    let template = grayscale(&decode_image(OK_BUTTON_TEMPLATE)?)?;
+    let match_cfg = EnchantDetectorConfig {
+        scale_min: OK_BUTTON_SCALE_MIN,
+        scale_max: OK_BUTTON_SCALE_MAX,
+        scale_step: OK_BUTTON_SCALE_STEP,
+        ..cfg.clone()
+    };
+
+    let mut matched = match_template(&source, &template, &match_cfg, OK_BUTTON_THRESHOLD)?;
+    if let Some(rect) = &mut matched.rect {
+        rect.x += search_rect.x;
+        rect.y += search_rect.y;
+    }
+    Ok(matched)
+}
+
 fn blue_mask(image: &Mat) -> opencv::Result<Mat> {
     let mut hsv = Mat::default();
     imgproc::cvt_color(
@@ -347,20 +376,7 @@ fn analyze_enchant_window_inner(
                 dialog
             };
 
-            let search = Mat::roi(frame, search_rect)?.try_clone()?;
-            let source = grayscale(&search)?;
-            let template = grayscale(&decode_image(OK_BUTTON_TEMPLATE)?)?;
-            let best = match_template(
-                &source,
-                &template,
-                cfg,
-                OK_BUTTON_THRESHOLD,
-            )?;
-            if let Some(rect) = &mut best.rect {
-                rect.x += search_rect.x;
-                rect.y += search_rect.y;
-            }
-            ok_button = best;
+            ok_button = find_ok_button(frame, search_rect, cfg)?;
 
             start_button = detect_start_button(frame, dialog, cfg)?;
         }
@@ -381,17 +397,7 @@ fn analyze_enchant_window_inner(
         } else {
             center_rect
         };
-        // One grayscale template covers all result variants. Grayscale matching
-        // is less sensitive to per-PC color, gamma and display differences.
-        let search = Mat::roi(frame, search_rect)?.try_clone()?;
-        let source = grayscale(&search)?;
-        let template = grayscale(&decode_image(OK_BUTTON_TEMPLATE)?)?;
-        let mut best = match_template(&source, &template, cfg, OK_BUTTON_THRESHOLD)?;
-        if let Some(rect) = &mut best.rect {
-            rect.x += search_rect.x;
-            rect.y += search_rect.y;
-        }
-        ok_button = best;
+        ok_button = find_ok_button(frame, search_rect, cfg)?;
     }
 
     Ok(EnchantAnalysis {
@@ -462,6 +468,53 @@ mod tests {
         assert_eq!(centered_result_region(&frame), expected_search);
         assert!(result.ok_button.found, "score={}", result.ok_button.score);
         assert!(result.ok_button.score >= OK_BUTTON_THRESHOLD);
+        assert_eq!(result.ok_button.rect, Some(expected_rect));
+    }
+
+    #[test]
+    fn ok_button_is_found_with_135_percent_display_scaling() {
+        let mut frame = Mat::new_rows_cols_with_default(
+            480,
+            640,
+            core::CV_8UC3,
+            Scalar::new(28.0, 35.0, 42.0, 0.0),
+        )
+        .unwrap();
+        let template = grayscale(&decode_image(OK_BUTTON_TEMPLATE).unwrap()).unwrap();
+        let mut scaled = Mat::default();
+        imgproc::resize(
+            &template,
+            &mut scaled,
+            Size::new(
+                (f64::from(template.cols()) * 1.35).round() as i32,
+                (f64::from(template.rows()) * 1.35).round() as i32,
+            ),
+            0.0,
+            0.0,
+            imgproc::INTER_LINEAR,
+        )
+        .unwrap();
+        let mut scaled_bgr = Mat::default();
+        imgproc::cvt_color(
+            &scaled,
+            &mut scaled_bgr,
+            imgproc::COLOR_GRAY2BGR,
+            0,
+            core::AlgorithmHint::ALGO_HINT_DEFAULT,
+        )
+        .unwrap();
+
+        let expected_rect = Rect::new(
+            (frame.cols() - scaled.cols()) / 2 + 32,
+            (frame.rows() - scaled.rows()) / 2 - 20,
+            scaled.cols(),
+            scaled.rows(),
+        );
+        let mut roi = Mat::roi_mut(&mut frame, expected_rect).unwrap();
+        scaled_bgr.copy_to(&mut roi).unwrap();
+
+        let result = analyze_enchant_result(&frame, &EnchantDetectorConfig::default()).unwrap();
+        assert!(result.ok_button.found, "score={}", result.ok_button.score);
         assert_eq!(result.ok_button.rect, Some(expected_rect));
     }
 
@@ -577,6 +630,25 @@ mod tests {
         let start = result.start_button.expect("Start template should be detected");
         assert!(start.active);
         assert_eq!((start.rect.x, start.rect.y), (53, 158));
+    }
+
+    #[test]
+    fn same_ok_button_template_is_used_inside_enchant_dialog() {
+        let mut frame = reference_sized_frame();
+        let ok = decode_image(OK_BUTTON_TEMPLATE).unwrap();
+        let expected = Rect::new(124, 88, ok.cols(), ok.rows());
+        let mut roi = Mat::roi_mut(&mut frame, expected).unwrap();
+        ok.copy_to(&mut roi).unwrap();
+
+        let cfg = EnchantDetectorConfig {
+            scale_min: 1.0,
+            scale_max: 1.0,
+            scale_step: 0.05,
+            ..Default::default()
+        };
+        let result = analyze_enchant_window(&frame, &cfg).unwrap();
+        assert!(result.ok_button.found, "score={}", result.ok_button.score);
+        assert_eq!(result.ok_button.rect, Some(expected));
     }
 
     #[test]
