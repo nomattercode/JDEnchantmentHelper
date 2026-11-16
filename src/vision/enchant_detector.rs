@@ -468,10 +468,8 @@ mod tests {
             Rect::new(220, 140, 200, 200)
         );
         assert!(result.ok_button.found, "score={}", result.ok_button.score);
-        assert_eq!(
-            result.ok_button.rect,
-            Some(expected_rect)
-        );
+        assert!(result.ok_button.score >= RESULT_OK_THRESHOLD);
+        assert_eq!(result.ok_button.rect, Some(expected_rect));
     }
 
     #[test]
@@ -499,16 +497,22 @@ mod tests {
     }
 
     #[test]
-    fn result_ok_is_detected_when_enchant_dialog_has_closed() {
+    fn uploaded_ok_button_is_detected_when_enchant_dialog_has_closed() {
         let mut frame = Mat::new_rows_cols_with_default(
-            260,
-            420,
+            480,
+            640,
             core::CV_8UC3,
             Scalar::new(28.0, 35.0, 42.0, 0.0),
         )
         .unwrap();
         let ok = decode_image(RESULT_OK_TEMPLATE).unwrap();
-        let mut roi = Mat::roi_mut(&mut frame, Rect::new(240, 160, ok.cols(), ok.rows())).unwrap();
+        let expected_rect = Rect::new(
+            (frame.cols() - ok.cols()) / 2,
+            (frame.rows() - ok.rows()) / 2,
+            ok.cols(),
+            ok.rows(),
+        );
+        let mut roi = Mat::roi_mut(&mut frame, expected_rect).unwrap();
         ok.copy_to(&mut roi).unwrap();
 
         let cfg = EnchantDetectorConfig {
@@ -521,10 +525,7 @@ mod tests {
         let result = analyze_enchant_result(&frame, &cfg).unwrap();
         assert!(result.dialog_window.is_none());
         assert!(result.ok_button.found, "score={}", result.ok_button.score);
-        assert_eq!(
-            result.ok_button.rect,
-            Some(Rect::new(240, 160, ok.cols(), ok.rows()))
-        );
+        assert_eq!(result.ok_button.rect, Some(expected_rect));
     }
 
     #[test]
