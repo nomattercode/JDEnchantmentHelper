@@ -461,7 +461,7 @@ mod tests {
         );
         assert_eq!(centered_result_region(&frame), expected_search);
         assert!(result.ok_button.found, "score={}", result.ok_button.score);
-        assert!(result.ok_button.score >= RESULT_OK_THRESHOLD);
+        assert!(result.ok_button.score >= OK_BUTTON_THRESHOLD);
         assert_eq!(result.ok_button.rect, Some(expected_rect));
     }
 
