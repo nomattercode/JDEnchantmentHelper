@@ -315,7 +315,7 @@ pub fn analyze_enchant_result(
 fn analyze_enchant_window_inner(
     frame: &Mat,
     cfg: &EnchantDetectorConfig,
-    search_ok_full_frame: bool,
+    search_result_center: bool,
 ) -> opencv::Result<EnchantAnalysis> {
     if frame.empty() {
         return Err(opencv::Error::new(core::StsBadArg, "Входной кадр пуст"));
@@ -325,58 +325,58 @@ fn analyze_enchant_window_inner(
     let mut ok_button = empty_match();
     let mut start_button = None;
 
-    if !search_ok_full_frame {
+    if !search_result_center {
         if let Some(dialog) = dialog_window {
             let search_rect = if let Some(region) = cfg.search_region {
-            let requested = clip_region(region, frame).ok_or_else(|| {
-                opencv::Error::new(core::StsBadArg, "Область поиска ОК вне кадра")
-            })?;
-            let x1 = requested.x.max(dialog.x);
-            let y1 = requested.y.max(dialog.y);
-            let x2 = (requested.x + requested.width).min(dialog.x + dialog.width);
-            let y2 = (requested.y + requested.height).min(dialog.y + dialog.height);
-            if x2 <= x1 || y2 <= y1 {
-                return Err(opencv::Error::new(
-                    core::StsBadArg,
-                    "Область поиска ОК не пересекается с окном зачарования",
-                ));
+                let requested = clip_region(region, frame).ok_or_else(|| {
+                    opencv::Error::new(core::StsBadArg, "Область поиска ОК вне кадра")
+                })?;
+                let x1 = requested.x.max(dialog.x);
+                let y1 = requested.y.max(dialog.y);
+                let x2 = (requested.x + requested.width).min(dialog.x + dialog.width);
+                let y2 = (requested.y + requested.height).min(dialog.y + dialog.height);
+                if x2 <= x1 || y2 <= y1 {
+                    return Err(opencv::Error::new(
+                        core::StsBadArg,
+                        "Область поиска ОК не пересекается с окном зачарования",
+                    ));
+                }
+                Rect::new(x1, y1, x2 - x1, y2 - y1)
+            } else {
+                dialog
+            };
+
+            let search = Mat::roi(frame, search_rect)?.try_clone()?;
+            let source = grayscale(&search)?;
+            let success = grayscale(&decode_image(SUCCESS_TEMPLATE)?)?;
+            let failure = grayscale(&decode_image(FAILURE_TEMPLATE)?)?;
+
+            let mut best = match_template(
+                &source,
+                &success,
+                cfg,
+                cfg.confidence_threshold,
+            )?;
+            let failure_match = match_template(
+                &source,
+                &failure,
+                cfg,
+                cfg.confidence_threshold,
+            )?;
+            if failure_match.score > best.score {
+                best = failure_match;
             }
-            Rect::new(x1, y1, x2 - x1, y2 - y1)
-        } else {
-            dialog
-        };
-
-        let search = Mat::roi(frame, search_rect)?.try_clone()?;
-        let source = grayscale(&search)?;
-        let success = grayscale(&decode_image(SUCCESS_TEMPLATE)?)?;
-        let failure = grayscale(&decode_image(FAILURE_TEMPLATE)?)?;
-
-        let mut best = match_template(
-            &source,
-            &success,
-            cfg,
-            cfg.confidence_threshold,
-        )?;
-        let failure_match = match_template(
-            &source,
-            &failure,
-            cfg,
-            cfg.confidence_threshold,
-        )?;
-        if failure_match.score > best.score {
-            best = failure_match;
-        }
-        if let Some(rect) = &mut best.rect {
-            rect.x += search_rect.x;
-            rect.y += search_rect.y;
-        }
-        ok_button = best;
+            if let Some(rect) = &mut best.rect {
+                rect.x += search_rect.x;
+                rect.y += search_rect.y;
+            }
+            ok_button = best;
 
             start_button = detect_start_button(frame, dialog, cfg)?;
         }
     }
 
-    if search_ok_full_frame {
+    if search_result_center {
         let center_rect = centered_result_region(frame);
         let search_rect = if let Some(region) = cfg.search_region {
             let requested = clip_region(region, frame).ok_or_else(|| {
