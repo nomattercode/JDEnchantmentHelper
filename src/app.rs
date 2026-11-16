@@ -1145,7 +1145,7 @@ impl EnchantmentHelperApp {
 
         if self.inventory_grid_region.is_configured() {
             ui.label(format!(
-                "Сетка настроена: {}×{} px, шаг {}×{} пикс.",
+                "Сетка настроена: {}×{} пикс., шаг {}×{} пикс.",
                 self.inventory_grid_region.width,
                 self.inventory_grid_region.height,
                 self.inventory.step_x,
