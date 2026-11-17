@@ -2205,7 +2205,7 @@ impl eframe::App for EnchantmentHelperApp {
                                     self.log("Автоматизация приостановлена.");
                                 }
                                 if ui.add_enabled(
-                                    self.run_state == RunState::Paused,
+                                    self.run_state == RunState::Paused && self.pending_capture_id.is_none(),
                                     egui::Button::new("Продолжить").min_size(egui::vec2(104.0, 32.0)),
                                 ).clicked() {
                                     if let Some(paused_at) = self.paused_at.take() {
@@ -2215,6 +2215,9 @@ impl eframe::App for EnchantmentHelperApp {
                                     self.next_automation_poll = Instant::now();
                                     self.status = "Автоматизация продолжена.".into();
                                     self.log("Автоматизация продолжена.");
+                                }
+                                if self.run_state == RunState::Paused && self.pending_capture_id.is_some() {
+                                    ui.small("Ожидаю завершения захвата текущего кадра перед продолжением.");
                                 }
                                 if ui.add_enabled(
                                     self.automation_phase.is_some()

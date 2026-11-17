@@ -180,6 +180,10 @@ pub fn detect_inventory_grid(frame: &Mat, base: &InventoryConfig) -> opencv::Res
     // Template crop is 87×30 (half-size); scale converts offsets into
     // client pixels: origin (+9,+31), pitch 20×20, cell 18×18.
     let mut config = base.clone();
+    // The supplied inventory layout has 6 columns and 8 rows. Determine
+    // geometry from the matched header while retaining user slot preferences.
+    config.columns = 6;
+    config.rows = 8;
     config.origin_x = header_rect.x + (9.0 * best_scale).round() as i32;
     config.origin_y = header_rect.y + (31.0 * best_scale).round() as i32;
     config.step_x = (20.0 * best_scale).round() as i32;
