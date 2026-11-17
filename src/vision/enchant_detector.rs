@@ -340,7 +340,11 @@ fn analyze_enchant_window_inner(
         return Err(opencv::Error::new(core::StsBadArg, "Входной кадр пуст"));
     }
 
-    let dialog_window = find_enchant_dialog(frame, cfg)?;
+    let dialog_window = if search_result_center {
+        None
+    } else {
+        find_enchant_dialog(frame, cfg)?
+    };
     let mut ok_button = empty_match();
     let mut start_button = None;
 

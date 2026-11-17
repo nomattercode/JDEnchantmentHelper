@@ -412,17 +412,20 @@ impl EnchantmentHelperApp {
                     0,
                 );
             }
-            if analysis.ok_button.found {
-                if let Some(rect) = analysis.ok_button.rect {
-                    let _ = imgproc::rectangle(
-                        &mut preview,
-                        rect,
-                        opencv::core::Scalar::new(0.0, 220.0, 255.0, 0.0),
-                        2,
-                        imgproc::LINE_8,
-                        0,
-                    );
-                }
+            if let Some(rect) = analysis.ok_button.rect {
+                let color = if analysis.ok_button.found {
+                    opencv::core::Scalar::new(0.0, 220.0, 255.0, 0.0)
+                } else {
+                    opencv::core::Scalar::new(0.0, 0.0, 255.0, 0.0)
+                };
+                let _ = imgproc::rectangle(
+                    &mut preview,
+                    rect,
+                    color,
+                    2,
+                    imgproc::LINE_8,
+                    0,
+                );
             }
             if let Some(start) = &analysis.start_button {
                 let color = if start.active {
@@ -1673,6 +1676,11 @@ impl EnchantmentHelperApp {
                 }
             }
             Some(AutomationPhase::WaitingForOk) => {
+                self.summary = format!(
+                    "Поиск кнопки «ОК»: совпадение {:.0}% · требуемый порог {:.0}%.",
+                    analysis.ok_button.score * 100.0,
+                    self.enchant.confidence_threshold * 100.0
+                );
                 let current = if analysis.ok_button.found {
                     analysis.ok_button.rect.map(|rect| Region {
                         x: rect.x,
