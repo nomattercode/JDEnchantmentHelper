@@ -29,6 +29,10 @@ const WINDOW_PREVIEW_MAX_HEIGHT: i32 = 84;
 const LIVE_PREVIEW_MAX_WIDTH: i32 = 520;
 const LIVE_PREVIEW_MAX_HEIGHT: i32 = 260;
 const LIVE_PREVIEW_INTERVAL: Duration = Duration::from_millis(350);
+const OK_BUTTON_FALLBACK_MARGIN: f64 = 0.18;
+const OK_BUTTON_FALLBACK_MIN_SCORE: f64 = 0.58;
+const OK_BUTTON_STRICT_CONFIRMATIONS: u8 = 2;
+const OK_BUTTON_FALLBACK_CONFIRMATIONS: u8 = 3;
 
 fn window_preview_size(width: i32, height: i32) -> Size {
     let width = width.max(1);
@@ -52,6 +56,32 @@ fn same_detection_region(left: Region, right: Region) -> bool {
         && left.y.abs_diff(right.y) <= 3
         && left.width.abs_diff(right.width) <= 3
         && left.height.abs_diff(right.height) <= 3
+}
+
+fn ok_button_fallback_threshold(configured_threshold: f64) -> f64 {
+    let configured = if configured_threshold.is_finite() {
+        configured_threshold.clamp(0.0, 1.0)
+    } else {
+        0.78
+    };
+    (configured - OK_BUTTON_FALLBACK_MARGIN).max(OK_BUTTON_FALLBACK_MIN_SCORE)
+}
+
+fn ok_button_confirmation_requirement(
+    found: bool,
+    score: f64,
+    configured_threshold: f64,
+    has_rect: bool,
+) -> Option<u8> {
+    if !has_rect {
+        return None;
+    }
+    if found {
+        return Some(OK_BUTTON_STRICT_CONFIRMATIONS);
+    }
+
+    (score.is_finite() && score >= ok_button_fallback_threshold(configured_threshold))
+        .then_some(OK_BUTTON_FALLBACK_CONFIRMATIONS)
 }
 
 fn validate_inventory_scan(
@@ -432,10 +462,17 @@ impl EnchantmentHelperApp {
                 );
             }
             if let Some(rect) = analysis.ok_button.rect {
-                let color = if analysis.ok_button.found {
-                    opencv::core::Scalar::new(0.0, 220.0, 255.0, 0.0)
-                } else {
-                    opencv::core::Scalar::new(0.0, 0.0, 255.0, 0.0)
+                let color = match ok_button_confirmation_requirement(
+                    analysis.ok_button.found,
+                    analysis.ok_button.score,
+                    self.enchant.confidence_threshold,
+                    true,
+                ) {
+                    Some(OK_BUTTON_STRICT_CONFIRMATIONS) => {
+                        opencv::core::Scalar::new(0.0, 220.0, 0.0, 0.0)
+                    }
+                    Some(_) => opencv::core::Scalar::new(0.0, 165.0, 255.0, 0.0),
+                    None => opencv::core::Scalar::new(0.0, 0.0, 255.0, 0.0),
                 };
                 let _ = imgproc::rectangle(
                     &mut preview,
@@ -563,7 +600,7 @@ impl EnchantmentHelperApp {
         self.last_detection = None;
     }
 
-    fn update_detection_streak(&mut self, current: Option<Region>) -> bool {
+    fn update_detection_streak(&mut self, current: Option<Region>, required_matches: u8) -> bool {
         if let Some(current) = current {
             let same_location = self
                 .last_detection
@@ -577,7 +614,7 @@ impl EnchantmentHelperApp {
         } else {
             self.reset_detection_streak();
         }
-        self.consecutive_matches >= 2
+        self.consecutive_matches >= required_matches.max(1)
     }
 
     fn selected_window_data(&self) -> Option<&GameWindow> {
@@ -1664,7 +1701,7 @@ impl EnchantmentHelperApp {
                         width: button.rect.width,
                         height: button.rect.height,
                     });
-                if self.update_detection_streak(current) {
+                if self.update_detection_streak(current, OK_BUTTON_STRICT_CONFIRMATIONS) {
                     if f12_pressed() {
                         self.stop_automation("Аварийная остановка: нажата F12.");
                         return;
@@ -1695,12 +1732,14 @@ impl EnchantmentHelperApp {
                 }
             }
             Some(AutomationPhase::WaitingForOk) => {
-                self.summary = format!(
-                    "Поиск кнопки «ОК»: совпадение {:.0}% · требуемый порог {:.0}%.",
-                    analysis.ok_button.score * 100.0,
-                    self.enchant.confidence_threshold * 100.0
+                let requirement = ok_button_confirmation_requirement(
+                    analysis.ok_button.found,
+                    analysis.ok_button.score,
+                    self.enchant.confidence_threshold,
+                    analysis.ok_button.rect.is_some(),
                 );
-                let current = if analysis.ok_button.found {
+                let required_matches = requirement.unwrap_or(OK_BUTTON_STRICT_CONFIRMATIONS);
+                let current = if requirement.is_some() {
                     analysis.ok_button.rect.map(|rect| Region {
                         x: rect.x,
                         y: rect.y,
@@ -1710,7 +1749,32 @@ impl EnchantmentHelperApp {
                 } else {
                     None
                 };
-                if self.update_detection_streak(current) {
+                let detection_confirmed = self.update_detection_streak(current, required_matches);
+
+                self.summary = match requirement {
+                    Some(OK_BUTTON_STRICT_CONFIRMATIONS) => format!(
+                        "Кнопка «ОК»: совпадение {:.0}% · порог {:.0}% · подтверждение {}/{}.",
+                        analysis.ok_button.score * 100.0,
+                        self.enchant.confidence_threshold * 100.0,
+                        self.consecutive_matches.min(required_matches),
+                        required_matches,
+                    ),
+                    Some(_) => format!(
+                        "Кандидат «ОК»: {:.0}% · порог настроек {:.0}% · резервный порог {:.0}% · подтверждение {}/{}.",
+                        analysis.ok_button.score * 100.0,
+                        self.enchant.confidence_threshold * 100.0,
+                        ok_button_fallback_threshold(self.enchant.confidence_threshold) * 100.0,
+                        self.consecutive_matches.min(required_matches),
+                        required_matches,
+                    ),
+                    None => format!(
+                        "Лучшее совпадение «ОК»: {:.0}% · требуется не менее {:.0}% для резервного подтверждения.",
+                        analysis.ok_button.score * 100.0,
+                        ok_button_fallback_threshold(self.enchant.confidence_threshold) * 100.0,
+                    ),
+                };
+
+                if detection_confirmed {
                     if f12_pressed() {
                         self.stop_automation("Аварийная остановка: нажата F12.");
                         return;
@@ -1723,7 +1787,17 @@ impl EnchantmentHelperApp {
                     let y = rect.y + rect.height / 2;
                     match click_window_point(handle, x, y) {
                         Ok(()) => {
-                            self.log("Кнопка «ОК» подтверждена и нажата. Обновляю текущую страницу инвентаря.");
+                            if analysis.ok_button.found {
+                                self.log("Кнопка «ОК» уверенно распознана и нажата.");
+                            } else {
+                                self.log(format!(
+                                    "Кнопка «ОК» нажата после резервного подтверждения: совпадение {:.0}%, заданный порог {:.0}%, резервный порог {:.0}%.",
+                                    analysis.ok_button.score * 100.0,
+                                    self.enchant.confidence_threshold * 100.0,
+                                    ok_button_fallback_threshold(self.enchant.confidence_threshold) * 100.0,
+                                ));
+                            }
+                            self.log("Обновляю текущую страницу инвентаря.");
                             self.reset_detection_streak();
                             self.automation_phase = Some(AutomationPhase::ReconcileInventory);
                             self.phase_started = Instant::now();
@@ -1733,7 +1807,19 @@ impl EnchantmentHelperApp {
                     }
                 } else if now.duration_since(self.last_wait_log) >= Duration::from_secs(10) {
                     self.last_wait_log = now;
-                    self.log("Ожидание кнопки «ОК».");
+                    match requirement {
+                        Some(_) => self.log(format!(
+                            "Кандидат «ОК» {:.0}% стабилен; подтверждение {}/{}. Жду следующий кадр.",
+                            analysis.ok_button.score * 100.0,
+                            self.consecutive_matches,
+                            required_matches,
+                        )),
+                        None => self.log(format!(
+                            "Ожидание кнопки «ОК»: лучшее совпадение {:.0}%, резервный порог {:.0}%.",
+                            analysis.ok_button.score * 100.0,
+                            ok_button_fallback_threshold(self.enchant.confidence_threshold) * 100.0,
+                        )),
+                    }
                 }
             }
             _ => {}
@@ -2365,6 +2451,40 @@ mod tests {
         let different = super::Region { x: 80, y: 20, width: 82, height: 42 };
         assert!(super::same_detection_region(first, jittered));
         assert!(!super::same_detection_region(first, different));
+    }
+
+    #[test]
+    fn confident_ok_match_keeps_two_frame_confirmation() {
+        assert_eq!(
+            super::ok_button_confirmation_requirement(true, 0.91, 0.78, true),
+            Some(super::OK_BUTTON_STRICT_CONFIRMATIONS),
+        );
+    }
+
+    #[test]
+    fn stable_near_threshold_ok_match_gets_three_frame_fallback() {
+        // 78% configured sensitivity yields a conservative 60% fallback.
+        assert_eq!(super::ok_button_fallback_threshold(0.78), 0.60);
+        assert_eq!(
+            super::ok_button_confirmation_requirement(false, 0.67, 0.78, true),
+            Some(super::OK_BUTTON_FALLBACK_CONFIRMATIONS),
+        );
+        assert_eq!(
+            super::ok_button_confirmation_requirement(false, 0.57, 0.78, true),
+            None,
+        );
+    }
+
+    #[test]
+    fn ok_match_without_rectangle_or_with_invalid_score_is_never_clickable() {
+        assert_eq!(
+            super::ok_button_confirmation_requirement(true, 0.99, 0.78, false),
+            None,
+        );
+        assert_eq!(
+            super::ok_button_confirmation_requirement(false, f64::NAN, 0.78, true),
+            None,
+        );
     }
 
     #[test]
