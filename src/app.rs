@@ -839,8 +839,7 @@ impl EnchantmentHelperApp {
         self.logical_inventory
             .iter()
             .find(|cell| {
-                cell.kind == CellKind::Occupied
-                    && cell.enchantable
+                cell.enchantable
                     && !self
                         .processed_slots_current_page
                         .contains(&(cell.row, cell.col))
