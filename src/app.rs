@@ -1,5 +1,6 @@
 use eframe::egui;
 use opencv::{core::Size, imgproc, prelude::*};
+use crate::capture_worker::{AnalysisKind, CaptureWorker};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     time::{Duration, Instant},
@@ -11,7 +12,7 @@ use crate::platform::{
     right_click_window_point, scroll_window,
 };
 use crate::vision::{
-    analyze_enchant_result, analyze_enchant_window, mat_to_rgb, scan_inventory,
+    detect_inventory_grid, mat_to_rgb, scan_inventory,
     inventory_scanner::{CellDebug, CellKind, InventoryScan},
     EnchantDetectorConfig, InventoryConfig, Region,
 };
@@ -25,6 +26,9 @@ const PAGE_CHANGE_CONFIRMATIONS: u8 = 2;
 const RESULT_POLL_INTERVAL: Duration = Duration::from_millis(180);
 const WINDOW_PREVIEW_MAX_WIDTH: i32 = 144;
 const WINDOW_PREVIEW_MAX_HEIGHT: i32 = 84;
+const LIVE_PREVIEW_MAX_WIDTH: i32 = 520;
+const LIVE_PREVIEW_MAX_HEIGHT: i32 = 260;
+const LIVE_PREVIEW_INTERVAL: Duration = Duration::from_millis(350);
 
 fn window_preview_size(width: i32, height: i32) -> Size {
     let width = width.max(1);
@@ -192,6 +196,13 @@ enum AutomationPhase {
 }
 
 pub struct EnchantmentHelperApp {
+    capture_worker: Option<CaptureWorker>,
+    pending_capture_id: Option<u64>,
+    live_frame_preview: Option<egui::TextureHandle>,
+    live_frame_preview_size: egui::Vec2,
+    last_live_preview_update: Option<Instant>,
+    last_saved_settings: Option<String>,
+    settings_dirty_since: Option<Instant>,
     windows: Vec<GameWindow>,
     selected_window: Option<isize>,
     window_previews: HashMap<isize, WindowPreview>,
@@ -243,7 +254,25 @@ pub struct EnchantmentHelperApp {
 
 impl Default for EnchantmentHelperApp {
     fn default() -> Self {
+        let (saved_settings, settings_warning) = match crate::settings::load() {
+            Ok(settings) => (settings, None),
+            Err(error) => (crate::settings::UserSettings::default(), Some(error)),
+        };
+        let last_saved_settings = serde_json::to_string(&saved_settings).ok();
+        let mut logs = vec!["Программа готова. F12 — аварийная остановка.".into()];
+        if let Some(warning) = settings_warning { logs.push(format!("Настройки не загружены: {warning}")); }
+        let capture_worker = match CaptureWorker::new() {
+            Ok(worker) => Some(worker),
+            Err(error) => { logs.push(error); None }
+        };
         Self {
+            capture_worker,
+            pending_capture_id: None,
+            live_frame_preview: None,
+            live_frame_preview_size: egui::Vec2::ZERO,
+            last_live_preview_update: None,
+            last_saved_settings,
+            settings_dirty_since: None,
             windows: list_visible_windows(),
             selected_window: None,
             window_previews: HashMap::new(),
@@ -255,7 +284,7 @@ impl Default for EnchantmentHelperApp {
             select_inventory_region: false,
             region_drag_start: None,
 
-            passes_total: 1,
+            passes_total: saved_settings.passes_total,
             current_pass: 1,
             items_processed_in_pass: 0,
             surviving_items_in_pass: 0,
@@ -276,7 +305,7 @@ impl Default for EnchantmentHelperApp {
             phase_started: Instant::now(),
             paused_at: None,
 
-            inventory_grid_region: Region::default(),
+            inventory_grid_region: saved_settings.inventory_grid_region,
             logical_inventory: Vec::new(),
             processed_slots_current_page: HashSet::new(),
             amulet_slot: None,
@@ -285,9 +314,9 @@ impl Default for EnchantmentHelperApp {
 
             status: "Выберите окно игры и настройте сетку инвентаря. Сначала предполагается открытой первая страница.".into(),
             summary: "Ожидание выбора игрового окна.".into(),
-            inventory: InventoryConfig::default(),
-            enchant: EnchantDetectorConfig::default(),
-            logs: vec!["Программа готова. F12 — аварийная остановка.".into()],
+            inventory: saved_settings.inventory,
+            enchant: saved_settings.enchant,
+            logs,
         }
     }
 }
@@ -299,6 +328,117 @@ impl EnchantmentHelperApp {
             let excess = self.logs.len() - 400;
             self.logs.drain(0..excess);
         }
+    }
+
+    fn current_user_settings(&self) -> crate::settings::UserSettings {
+        crate::settings::UserSettings {
+            schema_version: 1,
+            passes_total: self.passes_total,
+            inventory: self.inventory.clone(),
+            enchant: self.enchant.clone(),
+            inventory_grid_region: self.inventory_grid_region,
+        }
+    }
+
+    fn persist_settings_if_needed(&mut self) {
+        let settings = self.current_user_settings();
+        let Ok(snapshot) = serde_json::to_string(&settings) else { return; };
+        if self.last_saved_settings.as_deref() != Some(snapshot.as_str()) && self.settings_dirty_since.is_none() {
+            self.settings_dirty_since = Some(Instant::now());
+        }
+        if self.settings_dirty_since.is_some_and(|since| since.elapsed() >= Duration::from_millis(600)) {
+            match crate::settings::save(&settings) {
+                Ok(()) => {
+                    self.last_saved_settings = Some(snapshot);
+                    self.settings_dirty_since = None;
+                    self.log("Настройки сохранены в %APPDATA%\\JDEnchantmentHelper\\settings.json.");
+                }
+                Err(error) => {
+                    self.last_saved_settings = Some(snapshot);
+                    self.settings_dirty_since = None;
+                    self.log(format!("Не удалось сохранить настройки: {error}"));
+                }
+            }
+        }
+    }
+
+    fn update_live_frame_preview(&mut self, frame: &opencv::core::Mat, ctx: &egui::Context) {
+        if self.last_live_preview_update.is_some_and(|last| last.elapsed() < LIVE_PREVIEW_INTERVAL) { return; }
+        self.last_live_preview_update = Some(Instant::now());
+        let width = frame.cols().max(1);
+        let height = frame.rows().max(1);
+        let scale = (f64::from(LIVE_PREVIEW_MAX_WIDTH) / f64::from(width))
+            .min(f64::from(LIVE_PREVIEW_MAX_HEIGHT) / f64::from(height)).min(1.0);
+        let size = Size::new(
+            (f64::from(width) * scale).round().max(1.0) as i32,
+            (f64::from(height) * scale).round().max(1.0) as i32,
+        );
+        let mut thumbnail = opencv::core::Mat::default();
+        if let Err(error) = imgproc::resize(frame, &mut thumbnail, size, 0.0, 0.0, imgproc::INTER_AREA) {
+            self.log(format!("Не удалось подготовить превью кадра: {error}"));
+            return;
+        }
+        let Ok((width, height, pixels)) = mat_to_rgb(&thumbnail) else { return; };
+        let image = egui::ColorImage::from_rgb([width, height], &pixels);
+        if let Some(texture) = &mut self.live_frame_preview {
+            texture.set(image, egui::TextureOptions::LINEAR);
+        } else {
+            self.live_frame_preview = Some(ctx.load_texture("live-game-frame", image, egui::TextureOptions::LINEAR));
+        }
+        self.live_frame_preview_size = egui::vec2(width as f32, height as f32);
+    }
+
+    fn detect_inventory_automatically(&mut self, ctx: &egui::Context) {
+        let Some(handle) = self.selected_window else {
+            self.status = "Сначала выберите игровое окно.".into();
+            return;
+        };
+        let frame = match capture_window(handle) {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.status = format!("Не удалось получить кадр для поиска инвентаря: {error}");
+                self.log(self.status.clone());
+                return;
+            }
+        };
+        self.update_live_frame_preview(&frame, ctx);
+        let detection = match detect_inventory_grid(&frame, &self.inventory) {
+            Ok(Some(detection)) => detection,
+            Ok(None) => {
+                self.status = "Заголовок инвентаря не найден с достаточной уверенностью. Используйте ручную настройку.".into();
+                self.log(self.status.clone());
+                return;
+            }
+            Err(error) => {
+                self.status = format!("Ошибка поиска заголовка инвентаря: {error}");
+                self.log(self.status.clone());
+                return;
+            }
+        };
+        let scan = match scan_inventory(&frame, &detection.config) {
+            Ok(scan) => scan,
+            Err(error) => {
+                self.status = format!("Заголовок найден, но сетку не удалось проверить: {error}");
+                self.log(self.status.clone());
+                return;
+            }
+        };
+        if let Err(error) = validate_inventory_scan(&scan, detection.grid_region, &frame) {
+            self.status = format!("Найденная сетка не прошла проверку: {error}");
+            self.log(self.status.clone());
+            return;
+        }
+        self.inventory = detection.config;
+        self.inventory_grid_region = detection.grid_region;
+        self.calibration_preview = None;
+        self.select_inventory_region = false;
+        self.region_drag_start = None;
+        self.logical_inventory = scan.cells;
+        self.status = format!(
+            "Инвентарь найден по заголовку (совпадение {:.0}%). Сетка {}×{} настроена автоматически.",
+            detection.score * 100.0, self.inventory.columns, self.inventory.rows
+        );
+        self.log(self.status.clone());
     }
 
     fn reset_detection_streak(&mut self) {
@@ -658,8 +798,8 @@ impl EnchantmentHelperApp {
         }
     }
 
-    fn start_automation(&mut self) {
-        if matches!(self.run_state, RunState::Running | RunState::Paused) {
+    fn start_automation(&mut self, ctx: &egui::Context) {
+        if matches!(self.run_state, RunState::Running | RunState::Paused) || self.pending_capture_id.is_some() {
             return;
         }
         let Some(_handle) = self.selected_window else {
@@ -675,6 +815,10 @@ impl EnchantmentHelperApp {
         self.window_preview_queue.clear();
         self.window_preview_batch_requested = false;
 
+        if self.capture_worker.is_none() {
+            self.status = "Поток захвата кадров не запущен. Перезапустите приложение.".into();
+            return;
+        }
         let handle = self.selected_window.expect("Игровое окно проверено перед запуском");
         let frame = match capture_window(handle) {
             Ok(frame) => frame,
@@ -684,6 +828,7 @@ impl EnchantmentHelperApp {
             }
         };
 
+        self.update_live_frame_preview(&frame, ctx);
         self.current_pass = 1;
         self.items_processed_in_pass = 0;
         self.surviving_items_in_pass = 0;
@@ -737,39 +882,99 @@ impl EnchantmentHelperApp {
         }
     }
 
-    fn update_automation(&mut self) {
+    fn update_automation(&mut self, ctx: &egui::Context) {
         if self.automation_phase.is_some() && f12_pressed() {
             self.stop_automation("Аварийная остановка: нажата F12.");
-            return;
         }
-        if self.run_state != RunState::Running || self.automation_phase.is_none() {
+
+        // Keep at most one frame in flight. Capture and OpenCV matching run on
+        // a worker thread; only completed image data is copied into the UI.
+        if self.pending_capture_id.is_none() {
+            if self.run_state != RunState::Running || self.automation_phase.is_none() { return; }
+            let now = Instant::now();
+            if now < self.next_automation_poll { return; }
+            let Some(handle) = self.selected_window else {
+                self.stop_automation("Игровое окно не выбрано.");
+                return;
+            };
+            let analysis_kind = match self.automation_phase {
+                Some(AutomationPhase::DetectEnchantDialog | AutomationPhase::WaitingForStart) => AnalysisKind::EnchantDialog,
+                Some(AutomationPhase::WaitingForOk) => AnalysisKind::ResultPopup,
+                _ => AnalysisKind::None,
+            };
+            let Some(worker) = self.capture_worker.as_mut() else {
+                self.stop_automation("Поток захвата кадров недоступен.");
+                return;
+            };
+            match worker.request(handle, analysis_kind, self.enchant.clone()) {
+                Ok(request_id) => {
+                    self.pending_capture_id = Some(request_id);
+                    self.next_automation_poll = now + AUTOMATION_POLL_INTERVAL;
+                }
+                Err(error) => {
+                    self.stop_automation(&format!("Не удалось поставить кадр в очередь: {error}"));
+                    return;
+                }
+            }
+            ctx.request_repaint_after(Duration::from_millis(20));
             return;
         }
 
-        let now = Instant::now();
-        if now < self.next_automation_poll {
-            return;
-        }
-        self.next_automation_poll = now + AUTOMATION_POLL_INTERVAL;
-
-        let Some(handle) = self.selected_window else {
-            self.stop_automation("Игровое окно не выбрано.");
-            return;
+        let response = match self.capture_worker.as_ref().map(CaptureWorker::try_receive) {
+            Some(Ok(Some(response))) => response,
+            Some(Ok(None)) => {
+                ctx.request_repaint_after(Duration::from_millis(20));
+                return;
+            }
+            Some(Err(error)) => {
+                self.pending_capture_id = None;
+                self.stop_automation(&error);
+                return;
+            }
+            None => {
+                self.pending_capture_id = None;
+                self.stop_automation("Поток захвата кадров не создан.");
+                return;
+            }
         };
-        let frame = match capture_window(handle) {
-            Ok(frame) => frame,
+        let expected_id = self.pending_capture_id.take();
+        if expected_id != Some(response.id) {
+            self.log("Получен устаревший кадр; результат отброшен.");
+            return;
+        }
+        if self.run_state != RunState::Running || self.automation_phase.is_none() { return; }
+        let captured = match response.result {
+            Ok(captured) => captured,
             Err(error) => {
                 self.stop_automation(&format!("Не удалось получить кадр игры: {error}"));
                 return;
             }
         };
+        let frame = match captured.to_mat() {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.stop_automation(&error);
+                return;
+            }
+        };
+        let mut capture_analysis = captured.analysis;
+        self.update_live_frame_preview(&frame, ctx);
+        let now = Instant::now();
+        let Some(handle) = self.selected_window else {
+            self.stop_automation("Игровое окно не выбрано.");
+            return;
+        };
 
         match self.automation_phase {
             Some(AutomationPhase::DetectEnchantDialog) => {
-                let analysis = match analyze_enchant_window(&frame, &self.enchant) {
-                    Ok(analysis) => analysis,
-                    Err(error) => {
+                let analysis = match capture_analysis.take() {
+                    Some(Ok(analysis)) => analysis,
+                    Some(Err(error)) => {
                         self.stop_automation(&format!("Ошибка поиска окна зачарования: {error}"));
+                        return;
+                    }
+                    None => {
+                        self.stop_automation("Рабочий поток не вернул результат поиска окна зачарования.");
                         return;
                     }
                 };
@@ -1303,15 +1508,14 @@ impl EnchantmentHelperApp {
             return;
         }
 
-        let analysis_result = if phase == Some(AutomationPhase::WaitingForOk) {
-            analyze_enchant_result(&frame, &self.enchant)
-        } else {
-            analyze_enchant_window(&frame, &self.enchant)
-        };
-        let analysis = match analysis_result {
-            Ok(analysis) => analysis,
-            Err(error) => {
+        let analysis = match capture_analysis.take() {
+            Some(Ok(analysis)) => analysis,
+            Some(Err(error)) => {
                 self.stop_automation(&format!("Ошибка распознавания окна зачарования: {error}"));
+                return;
+            }
+            None => {
+                self.stop_automation("Рабочий поток не вернул результат распознавания.");
                 return;
             }
         };
@@ -1450,11 +1654,31 @@ impl EnchantmentHelperApp {
             self.inventory.start_col = col.saturating_sub(1).min(self.inventory.columns.saturating_sub(1));
         });
 
-        ui.add(
-            egui::Slider::new(&mut self.inventory.threshold, 0.0..=1.0)
-                .step_by(0.01)
-                .text("Чувствительность определения предмета"),
-        );
+        let mut inventory_percent = (self.inventory.threshold.clamp(0.0, 1.0) * 100.0).round() as u32;
+        if ui.add(egui::Slider::new(&mut inventory_percent, 0..=100).text("Чувствительность предметов").suffix("%")).changed() {
+            self.inventory.threshold = f64::from(inventory_percent) / 100.0;
+        }
+        let mut inventory_header_percent = (self.inventory.header_threshold.clamp(0.0, 1.0) * 100.0).round() as u32;
+        if ui.add(egui::Slider::new(&mut inventory_header_percent, 40..=98).text("Поиск заголовка инвентаря").suffix("%")).changed() {
+            self.inventory.header_threshold = f64::from(inventory_header_percent) / 100.0;
+        }
+        ui.separator();
+        let mut ok_percent = (self.enchant.confidence_threshold.clamp(0.0, 1.0) * 100.0).round() as u32;
+        if ui.add(egui::Slider::new(&mut ok_percent, 40..=98).text("Чувствительность кнопки «ОК»").suffix("%")).changed() {
+            self.enchant.confidence_threshold = f64::from(ok_percent) / 100.0;
+        }
+        let mut enchant_header_percent = (self.enchant.header_threshold.clamp(0.0, 1.0) * 100.0).round() as u32;
+        if ui.add(egui::Slider::new(&mut enchant_header_percent, 40..=98).text("Поиск окна зачарования").suffix("%")).changed() {
+            self.enchant.header_threshold = f64::from(enchant_header_percent) / 100.0;
+        }
+        let mut start_percent = (self.enchant.start_template_threshold.clamp(0.0, 1.0) * 100.0).round() as u32;
+        if ui.add(egui::Slider::new(&mut start_percent, 40..=98).text("Поиск кнопки «Начать»").suffix("%")).changed() {
+            self.enchant.start_template_threshold = f64::from(start_percent) / 100.0;
+        }
+        let mut blue_percent = (self.enchant.min_blue_ratio.clamp(0.0, 1.0) * 100.0).round() as u32;
+        if ui.add(egui::Slider::new(&mut blue_percent, 10..=90).text("Порог синего цвета кнопки").suffix("%")).changed() {
+            self.enchant.min_blue_ratio = f64::from(blue_percent) / 100.0;
+        }
 
         if self.inventory_grid_region.is_configured() {
             ui.label(format!(
@@ -1558,14 +1782,14 @@ impl EnchantmentHelperApp {
         }
 
         ui.horizontal(|ui| {
-            ui.add_enabled_ui(
-                self.automation_phase.is_none(),
-                |ui| {
-                    if ui.button("Снять кадр и выделить сетку").clicked() {
-                        self.capture_calibration_snapshot(ctx);
-                    }
-                },
-            );
+            ui.add_enabled_ui(self.automation_phase.is_none(), |ui| {
+                if ui.button("Найти инвентарь автоматически").clicked() {
+                    self.detect_inventory_automatically(ctx);
+                }
+                if ui.button("Снять кадр и выделить сетку").clicked() {
+                    self.capture_calibration_snapshot(ctx);
+                }
+            });
             if self.calibration_preview.is_some() {
                 ui.label("Выделите мышью всю сетку — от первой до последней ячейки.");
             } else if self.inventory_grid_region.is_configured() {
@@ -1670,7 +1894,7 @@ impl EnchantmentHelperApp {
 
 impl eframe::App for EnchantmentHelperApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.update_automation();
+        self.update_automation(ctx);
         self.capture_next_window_preview(ctx);
 
         egui::TopBottomPanel::top("header").show(ctx, |ui| {
@@ -1750,7 +1974,7 @@ impl eframe::App for EnchantmentHelperApp {
                             }
 
                             egui::CollapsingHeader::new("Параметры сетки и распознавания")
-                                .default_open(false)
+                                .default_open(true)
                                 .show(ui, |ui| {
                                     ui.add_enabled_ui(self.automation_phase.is_none(), |ui| {
                                         self.inventory_settings_ui(ui);
@@ -1815,7 +2039,7 @@ impl eframe::App for EnchantmentHelperApp {
                                 )
                                 .min_size(egui::vec2(ui.available_width(), 46.0)),
                             ).clicked() {
-                                self.start_automation();
+                                self.start_automation(ctx);
                             }
                             if !can_start {
                                 let hint = if self.selected_window_data().is_none() {
@@ -1916,17 +2140,28 @@ impl eframe::App for EnchantmentHelperApp {
 
                         ui.add_space(8.0);
                         ui.group(|ui| {
-                            egui::CollapsingHeader::new(format!("Журнал событий · {}", self.logs.len()))
-                                .default_open(false)
+                            ui.label(egui::RichText::new("КАК ВИДИТ ПРОГРАММА").strong());
+                            if let Some(texture) = &self.live_frame_preview {
+                                let max_width = ui.available_width().max(1.0);
+                                let scale = (max_width / self.live_frame_preview_size.x.max(1.0))
+                                    .min(220.0 / self.live_frame_preview_size.y.max(1.0))
+                                    .min(1.0);
+                                ui.add(egui::Image::new((texture.id(), self.live_frame_preview_size * scale)));
+                            } else {
+                                ui.small("Кадр появится после автоматического поиска инвентаря или запуска серии.");
+                            }
+                        });
+
+                        ui.add_space(8.0);
+                        ui.group(|ui| {
+                            ui.label(egui::RichText::new(format!("ЖУРНАЛ СОБЫТИЙ · {}", self.logs.len())).strong());
+                            egui::ScrollArea::vertical()
+                                .max_height(180.0)
+                                .stick_to_bottom(true)
                                 .show(ui, |ui| {
-                                    egui::ScrollArea::vertical()
-                                        .max_height(220.0)
-                                        .stick_to_bottom(true)
-                                        .show(ui, |ui| {
-                                            for line in self.logs.iter().rev().take(120).rev() {
-                                                ui.monospace(line);
-                                            }
-                                        });
+                                    for line in self.logs.iter().rev().take(120).rev() {
+                                        ui.monospace(line);
+                                    }
                                 });
                         });
                     });
@@ -1934,10 +2169,19 @@ impl eframe::App for EnchantmentHelperApp {
             });
         });
 
-        if self.automation_phase.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(35));
+        self.persist_settings_if_needed();
+        if self.automation_phase.is_some() || self.pending_capture_id.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(25));
         } else if !self.window_preview_queue.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(25));
+        }
+    }
+}
+
+impl Drop for EnchantmentHelperApp {
+    fn drop(&mut self) {
+        if let Err(error) = crate::settings::save(&self.current_user_settings()) {
+            eprintln!("Не удалось сохранить настройки при закрытии: {error}");
         }
     }
 }
