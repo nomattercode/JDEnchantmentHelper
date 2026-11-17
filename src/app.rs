@@ -388,6 +388,100 @@ impl EnchantmentHelperApp {
         self.live_frame_preview_size = egui::vec2(width as f32, height as f32);
     }
 
+    fn update_analysis_frame_preview(
+        &mut self,
+        frame: &opencv::core::Mat,
+        analysis: Option<&Result<crate::vision::enchant_detector::EnchantAnalysis, String>>,
+        ctx: &egui::Context,
+    ) {
+        let mut preview = match frame.try_clone() {
+            Ok(image) => image,
+            Err(_) => {
+                self.update_live_frame_preview(frame, ctx);
+                return;
+            }
+        };
+        if let Some(Ok(analysis)) = analysis {
+            if let Some(dialog) = analysis.dialog_window {
+                let _ = imgproc::rectangle(
+                    &mut preview,
+                    dialog,
+                    opencv::core::Scalar::new(40.0, 220.0, 80.0, 0.0),
+                    2,
+                    imgproc::LINE_8,
+                    0,
+                );
+            }
+            if analysis.ok_button.found {
+                if let Some(rect) = analysis.ok_button.rect {
+                    let _ = imgproc::rectangle(
+                        &mut preview,
+                        rect,
+                        opencv::core::Scalar::new(0.0, 220.0, 255.0, 0.0),
+                        2,
+                        imgproc::LINE_8,
+                        0,
+                    );
+                }
+            }
+            if let Some(start) = &analysis.start_button {
+                let color = if start.active {
+                    opencv::core::Scalar::new(255.0, 160.0, 0.0, 0.0)
+                } else {
+                    opencv::core::Scalar::new(120.0, 160.0, 255.0, 0.0)
+                };
+                let _ = imgproc::rectangle(
+                    &mut preview,
+                    start.rect,
+                    color,
+                    2,
+                    imgproc::LINE_8,
+                    0,
+                );
+            }
+        }
+        self.update_live_frame_preview(&preview, ctx);
+    }
+
+    fn update_inventory_detection_preview(
+        &mut self,
+        frame: &opencv::core::Mat,
+        detection: &crate::vision::InventoryDetection,
+        ctx: &egui::Context,
+    ) {
+        let mut preview = match frame.try_clone() {
+            Ok(image) => image,
+            Err(_) => {
+                self.update_live_frame_preview(frame, ctx);
+                return;
+            }
+        };
+        let _ = imgproc::rectangle(
+            &mut preview,
+            detection.header_rect,
+            opencv::core::Scalar::new(0.0, 220.0, 255.0, 0.0),
+            2,
+            imgproc::LINE_8,
+            0,
+        );
+        let grid = opencv::core::Rect::new(
+            detection.grid_region.x,
+            detection.grid_region.y,
+            detection.grid_region.width,
+            detection.grid_region.height,
+        );
+        let _ = imgproc::rectangle(
+            &mut preview,
+            grid,
+            opencv::core::Scalar::new(60.0, 220.0, 80.0, 0.0),
+            2,
+            imgproc::LINE_8,
+            0,
+        );
+        self.last_live_preview_update = None;
+        self.update_live_frame_preview(&preview, ctx);
+    }
+
     fn detect_inventory_automatically(&mut self, ctx: &egui::Context) {
         let Some(handle) = self.selected_window else {
             self.status = "Сначала выберите игровое окно.".into();
@@ -428,6 +522,7 @@ impl EnchantmentHelperApp {
             self.log(self.status.clone());
             return;
         }
+        self.update_inventory_detection_preview(&frame, &detection, ctx);
         self.inventory = detection.config;
         self.inventory_grid_region = detection.grid_region;
         self.calibration_preview = None;
@@ -564,11 +659,18 @@ impl EnchantmentHelperApp {
             return;
         };
 
-        match capture_window(handle).and_then(|frame| {
-            let (width, height, pixels) =
-                mat_to_rgb(&frame).map_err(|error| error.to_string())?;
-            Ok((width, height, pixels))
-        }) {
+        let frame = match capture_window(handle) {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.calibration_preview = None;
+                self.status = format!("Не удалось получить кадр игрового окна: {error}");
+                self.log(format!("Ошибка получения кадра: {error}"));
+                return;
+            }
+        };
+        self.last_live_preview_update = None;
+        self.update_live_frame_preview(&frame, ctx);
+        match mat_to_rgb(&frame).map_err(|error| error.to_string()) {
             Ok((width, height, pixels)) => {
                 let image = egui::ColorImage::from_rgb([width, height], &pixels);
                 self.calibration_preview_size = egui::vec2(width as f32, height as f32);
@@ -958,7 +1060,7 @@ impl EnchantmentHelperApp {
             }
         };
         let mut capture_analysis = captured.analysis;
-        self.update_live_frame_preview(&frame, ctx);
+        self.update_analysis_frame_preview(&frame, capture_analysis.as_ref(), ctx);
         let now = Instant::now();
         let Some(handle) = self.selected_window else {
             self.stop_automation("Игровое окно не выбрано.");
