@@ -1,6 +1,7 @@
 mod app;
 mod model;
 mod platform;
+mod settings;
 mod vision;
 
 fn main() -> eframe::Result<()> {
