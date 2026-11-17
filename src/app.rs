@@ -1760,7 +1760,9 @@ impl EnchantmentHelperApp {
             if self.selected_window != previous_window {
                 self.calibration_preview = None;
                 self.select_inventory_region = false;
-                self.inventory_grid_region = Region::default();
+                if previous_window.is_some() {
+                    self.inventory_grid_region = Region::default();
+                }
                 self.logical_inventory.clear();
                 self.processed_slots_current_page.clear();
                 self.amulet_slot = None;
@@ -1768,8 +1770,16 @@ impl EnchantmentHelperApp {
                 self.current_item = None;
                 self.page_index = 0;
                 self.current_page_fingerprint = None;
-                self.status = "Игровое окно выбрано. Первая страница инвентаря должна быть открыта. Снимите кадр для настройки сетки.".into();
-                self.log("Выбрано новое игровое окно. Настройки сетки сброшены.");
+                self.status = if self.inventory_grid_region.is_configured() {
+                    "Игровое окно выбрано. Сохранённая геометрия сетки загружена; проверьте её перед запуском.".into()
+                } else {
+                    "Игровое окно выбрано. Откройте первую страницу инвентаря и найдите сетку.".into()
+                };
+                if previous_window.is_some() {
+                    self.log("Выбрано другое игровое окно. Геометрия старой сетки сброшена.");
+                } else {
+                    self.log("Игровое окно выбрано. Сохранённые параметры распознавания загружены.");
+                }
             }
         });
 

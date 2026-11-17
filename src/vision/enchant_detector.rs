@@ -176,20 +176,6 @@ fn intersect_rects(left: Rect, right: Rect) -> Option<Rect> {
     (x2 > x1 && y2 > y1).then(|| Rect::new(x1, y1, x2 - x1, y2 - y1))
 }
 
-/// The search area is the centered region covering 50% of the game-frame area.
-/// Keeping the frame aspect ratio makes it about 70.7% of each dimension.
-fn centered_result_region(frame: &Mat) -> Rect {
-    let scale = 0.5_f64.sqrt();
-    let width = (f64::from(frame.cols()) * scale).round() as i32;
-    let height = (f64::from(frame.rows()) * scale).round() as i32;
-    Rect::new(
-        (frame.cols() - width) / 2,
-        (frame.rows() - height) / 2,
-        width.max(1),
-        height.max(1),
-    )
-}
-
 /// Detect the same OK button in any bounded area, regardless of whether
 /// the result popup replaced the enchant dialog. The wider scale range helps
 /// when Windows display scaling differs between computers.
@@ -428,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn ok_button_is_found_in_the_center_half_area() {
+    fn ok_button_is_found_in_full_frame_search() {
         let mut frame = Mat::new_rows_cols_with_default(
             480,
             640,
@@ -455,13 +441,6 @@ mod tests {
             ..Default::default()
         };
         let result = analyze_enchant_result(&frame, &cfg).unwrap();
-        let expected_search = Rect::new(
-            93,
-            70,
-            453,
-            339,
-        );
-        assert_eq!(centered_result_region(&frame), expected_search);
         assert!(result.ok_button.found, "score={}", result.ok_button.score);
         assert!(result.ok_button.score >= cfg.confidence_threshold);
         assert_eq!(result.ok_button.rect, Some(expected_rect));

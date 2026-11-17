@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use opencv::{
-    core::{self, Mat, Rect, Scalar},
+    core::{self, Mat, Rect, Scalar, Size},
     imgproc,
     prelude::*,
 };
