@@ -364,7 +364,7 @@ impl EnchantmentHelperApp {
 
     fn current_user_settings(&self) -> crate::settings::UserSettings {
         crate::settings::UserSettings {
-            schema_version: 1,
+            schema_version: 2,
             passes_total: self.passes_total,
             inventory: self.inventory.clone(),
             enchant: self.enchant.clone(),
@@ -798,13 +798,16 @@ impl EnchantmentHelperApp {
             }
         }
 
-        let item_count = self
-            .logical_inventory
+        let occupied_count = self.logical_inventory
             .iter()
             .filter(|cell| cell.kind == CellKind::Occupied)
             .count();
+        let item_count = self.logical_inventory
+            .iter()
+            .filter(|cell| cell.enchantable)
+            .count();
         self.summary = format!(
-            "Проход {}/{} · страница {} · предметов на странице: {} · обработано: {} · уцелело: {}",
+            "Проход {}/{} · страница {} · пригодно к зачарованию: {} · обработано: {} · уцелело: {}",
             self.current_pass,
             self.passes_total,
             self.page_index + 1,
@@ -814,9 +817,10 @@ impl EnchantmentHelperApp {
         );
 
         self.log(format!(
-            "{} страница {}: найдено занятых ячеек {}.",
+            "{} страница {}: занятых ячеек {}, с красным маркером для зачарования {}.",
             if initial { "Начальное сканирование:" } else { "Обновление:" },
             self.page_index + 1,
+            occupied_count,
             item_count
         ));
         Ok(())
@@ -836,6 +840,7 @@ impl EnchantmentHelperApp {
             .iter()
             .find(|cell| {
                 cell.kind == CellKind::Occupied
+                    && cell.enchantable
                     && !self
                         .processed_slots_current_page
                         .contains(&(cell.row, cell.col))
@@ -1220,14 +1225,23 @@ impl EnchantmentHelperApp {
                     return;
                 };
 
-                if verified.kind != CellKind::Occupied || verified.score < self.inventory.threshold {
+                if verified.kind != CellKind::Occupied
+                    || verified.score < self.inventory.threshold
+                    || !verified.enchantable
+                {
                     self.processed_slots_current_page.insert((item.row, item.col));
                     self.items_processed_in_pass = self.items_processed_in_pass.saturating_add(1);
                     self.current_item = self.next_unprocessed_item();
+                    let reason = if verified.kind == CellKind::Occupied && !verified.enchantable {
+                        "красный маркер не обнаружен или ниже порога фильтра"
+                    } else {
+                        "слот пуст"
+                    };
                     self.log(format!(
-                        "Ячейка {}, {} уже пуста. Пропускаю её.",
+                        "Ячейка {}, {} пропущена: {}.",
                         item.row + 1,
-                        item.col + 1
+                        item.col + 1,
+                        reason
                     ));
                     if self.current_item.is_none() {
                         if let Err(error) = self.begin_scroll_down(handle) {
@@ -1280,17 +1294,23 @@ impl EnchantmentHelperApp {
                     self.items_processed_in_pass = self.items_processed_in_pass.saturating_add(1);
                     let updated = self.logical_inventory
                         .iter()
-                        .find(|cell| cell.row == previous.row && cell.col == previous.col);
-                    match updated.map(|cell| cell.kind) {
-                        Some(CellKind::Occupied) => {
+                        .find(|cell| cell.row == previous.row && cell.col == previous.col)
+                        .map(|cell| (cell.kind, cell.enchantable));
+                    match updated {
+                        Some((CellKind::Occupied, true)) => {
                             self.surviving_items_in_pass = self.surviving_items_in_pass.saturating_add(1);
                             self.log(format!(
-                                "Предмет в ячейке {}, {} уцелел. Он будет доступен в следующем проходе.",
+                                "Предмет в ячейке {}, {} уцелел и сохранил красный маркер. Он доступен в следующем проходе.",
                                 previous.row + 1,
                                 previous.col + 1
                             ));
                         }
-                        Some(CellKind::Empty) => self.log(format!(
+                        Some((CellKind::Occupied, false)) => self.log(format!(
+                            "Предмет в ячейке {}, {} остался, но красный маркер больше не обнаружен; следующие проходы его пропустят.",
+                            previous.row + 1,
+                            previous.col + 1
+                        )),
+                        Some((CellKind::Empty, _)) => self.log(format!(
                             "Предмет в ячейке {}, {} исчез после зачарования.",
                             previous.row + 1,
                             previous.col + 1
@@ -1878,6 +1898,27 @@ impl EnchantmentHelperApp {
             self.inventory.header_threshold = f64::from(inventory_header_percent) / 100.0;
         }
         ui.separator();
+        ui.label(egui::RichText::new("Фильтр предметов по красному цвету").strong());
+        ui.small("К зачарованию допускаются только занятые ячейки, где доля красных пикселей достигает заданного порога.");
+
+        let mut red_hue = self.inventory.red_hue_range;
+        if ui.add(egui::Slider::new(&mut red_hue, 2..=30).text("Диапазон оттенка красного").suffix("°")).changed() {
+            self.inventory.red_hue_range = red_hue;
+        }
+        let mut red_saturation = self.inventory.red_saturation_min;
+        if ui.add(egui::Slider::new(&mut red_saturation, 20..=255).text("Минимальная насыщенность красного")).changed() {
+            self.inventory.red_saturation_min = red_saturation;
+        }
+        let mut red_value = self.inventory.red_value_min;
+        if ui.add(egui::Slider::new(&mut red_value, 10..=220).text("Минимальная яркость красного")).changed() {
+            self.inventory.red_value_min = red_value;
+        }
+        let mut red_percent = (self.inventory.red_ratio_threshold.clamp(0.005, 0.50) * 100.0).round() as u32;
+        if ui.add(egui::Slider::new(&mut red_percent, 1..=50).text("Минимальная доля красного в ячейке").suffix("%")).changed() {
+            self.inventory.red_ratio_threshold = f64::from(red_percent) / 100.0;
+        }
+
+        ui.separator();
         let mut ok_percent = (self.enchant.confidence_threshold.clamp(0.0, 1.0) * 100.0).round() as u32;
         if ui.add(egui::Slider::new(&mut ok_percent, 40..=98).text("Чувствительность кнопки «ОК»").suffix("%")).changed() {
             self.enchant.confidence_threshold = f64::from(ok_percent) / 100.0;
@@ -1922,46 +1963,58 @@ impl EnchantmentHelperApp {
                     .selected_text(self.selected_label())
                     .show_ui(ui, |ui| {
                         for window in self.windows.clone() {
-                            ui.horizontal(|ui| {
-                                if let Some(preview) = self.window_previews.get(&window.handle) {
-                                    let scale = (112.0 / preview.size.x)
-                                        .min(66.0 / preview.size.y)
-                                        .min(1.0);
-                                    ui.add(egui::Image::new((
-                                        preview.texture.id(),
-                                        preview.size * scale,
-                                    )));
-                                } else if self.window_preview_queue.contains(&window.handle) {
-                                    ui.allocate_ui(egui::vec2(112.0, 58.0), |ui| {
-                                        ui.centered_and_justified(|ui| {
-                                            ui.small("Снимок…");
-                                        });
-                                    });
-                                } else if self.window_preview_errors.contains_key(&window.handle) {
-                                    ui.allocate_ui(egui::vec2(112.0, 58.0), |ui| {
-                                        ui.centered_and_justified(|ui| {
-                                            ui.small("Нет превью");
-                                        });
-                                    });
-                                } else {
-                                    ui.allocate_ui(egui::vec2(112.0, 58.0), |ui| {
-                                        ui.centered_and_justified(|ui| {
-                                            ui.small("Превью не снято");
-                                        });
-                                    });
-                                }
+                            let selected = self.selected_window == Some(window.handle);
+                            let (row_rect, row_response) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), 76.0),
+                                egui::Sense::click(),
+                            );
+                            let row_fill = if selected {
+                                ui.visuals().selection.bg_fill
+                            } else if row_response.hovered() {
+                                ui.visuals().widgets.hovered.bg_fill
+                            } else {
+                                ui.visuals().widgets.inactive.bg_fill
+                            };
+                            ui.painter().rect_filled(row_rect, 4.0, row_fill);
 
-                                let label = format!(
-                                    "{} · {}×{}",
-                                    window.title, window.width, window.height
-                                );
-                                ui.selectable_value(
-                                    &mut self.selected_window,
-                                    Some(window.handle),
-                                    label,
-                                );
+                            ui.allocate_ui_at_rect(row_rect.shrink(5.0), |row_ui| {
+                                row_ui.horizontal(|row_ui| {
+                                    if let Some(preview) = self.window_previews.get(&window.handle) {
+                                        let scale = (112.0 / preview.size.x)
+                                            .min(66.0 / preview.size.y)
+                                            .min(1.0);
+                                        row_ui.add(egui::Image::new((
+                                            preview.texture.id(),
+                                            preview.size * scale,
+                                        )));
+                                    } else if self.window_preview_queue.contains(&window.handle) {
+                                        row_ui.allocate_ui(egui::vec2(112.0, 58.0), |ui| {
+                                            ui.centered_and_justified(|ui| ui.small("Снимок…"));
+                                        });
+                                    } else if self.window_preview_errors.contains_key(&window.handle) {
+                                        row_ui.allocate_ui(egui::vec2(112.0, 58.0), |ui| {
+                                            ui.centered_and_justified(|ui| ui.small("Нет превью"));
+                                        });
+                                    } else {
+                                        row_ui.allocate_ui(egui::vec2(112.0, 58.0), |ui| {
+                                            ui.centered_and_justified(|ui| ui.small("Превью не снято"));
+                                        });
+                                    }
+
+                                    row_ui.vertical(|text_ui| {
+                                        text_ui.label(egui::RichText::new(window.title.clone()).strong());
+                                        text_ui.small(format!(
+                                            "{} × {} · PID {}",
+                                            window.width, window.height, window.process_id
+                                        ));
+                                    });
+                                });
                             });
-                            ui.separator();
+
+                            if row_response.clicked() {
+                                self.selected_window = Some(window.handle);
+                            }
+                            ui.add_space(3.0);
                         }
                     });
                 if combo.inner.is_some() && !self.window_preview_batch_requested {

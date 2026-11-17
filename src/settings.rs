@@ -6,7 +6,7 @@ use crate::{
     vision::{EnchantDetectorConfig, InventoryConfig, Region},
 };
 
-const SETTINGS_SCHEMA_VERSION: u32 = 1;
+const SETTINGS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -50,6 +50,11 @@ impl UserSettings {
         self.inventory.start_col = self.inventory.start_col.min(self.inventory.columns - 1);
         self.inventory.threshold = unit_interval(self.inventory.threshold, 0.11);
         self.inventory.header_threshold = unit_interval(self.inventory.header_threshold, 0.72);
+        self.inventory.red_hue_range = self.inventory.red_hue_range.clamp(2, 30);
+        self.inventory.red_saturation_min = self.inventory.red_saturation_min.clamp(20, 255);
+        self.inventory.red_value_min = self.inventory.red_value_min.clamp(10, 220);
+        self.inventory.red_ratio_threshold =
+            unit_interval(self.inventory.red_ratio_threshold, 0.02).clamp(0.005, 0.50);
 
         self.enchant.confidence_threshold = unit_interval(self.enchant.confidence_threshold, 0.78);
         self.enchant.header_threshold = unit_interval(self.enchant.header_threshold, 0.64);

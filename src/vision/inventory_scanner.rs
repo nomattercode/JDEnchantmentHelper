@@ -23,6 +23,12 @@ pub struct InventoryConfig {
     pub amulet_col: u8,
     pub threshold: f64,
     pub header_threshold: f64,
+    /// OpenCV HSV hue tolerance around red (0/179 wraparound).
+    pub red_hue_range: u8,
+    pub red_saturation_min: u8,
+    pub red_value_min: u8,
+    /// Minimum fraction of red pixels in a slot's inner crop.
+    pub red_ratio_threshold: f64,
 }
 
 impl Default for InventoryConfig {
@@ -34,6 +40,10 @@ impl Default for InventoryConfig {
             inset: 6, start_row: 0, start_col: 1, amulet_row: 0, amulet_col: 0,
             threshold: 0.11,
             header_threshold: 0.72,
+            red_hue_range: 12,
+            red_saturation_min: 80,
+            red_value_min: 35,
+            red_ratio_threshold: 0.02,
         }
     }
 }
@@ -47,6 +57,8 @@ pub struct CellDebug {
     pub col: u8,
     pub rect: Rect,
     pub score: f64,
+    pub red_ratio: f64,
+    pub enchantable: bool,
     pub kind: CellKind,
 }
 
@@ -70,15 +82,18 @@ fn inside_frame(rect: Rect, frame: &Mat) -> bool {
         && rect.y + rect.height <= frame.rows()
 }
 
-fn score_cell(frame: &Mat, rect: Rect, config: &InventoryConfig) -> opencv::Result<f64> {
+fn inner_cell_rect(rect: Rect, config: &InventoryConfig) -> Rect {
     let inset = config.inset.max(0).min((rect.width.min(rect.height) - 2).max(0) / 2);
-    let roi = Rect::new(
+    Rect::new(
         rect.x + inset,
         rect.y + inset,
         rect.width - 2 * inset,
         rect.height - 2 * inset,
-    );
-    let crop = Mat::roi(frame, roi)?;
+    )
+}
+
+fn score_cell(frame: &Mat, rect: Rect, config: &InventoryConfig) -> opencv::Result<f64> {
+    let crop = Mat::roi(frame, inner_cell_rect(rect, config))?;
     let mut gray = Mat::default();
     imgproc::cvt_color(
         &crop,
@@ -92,6 +107,44 @@ fn score_cell(frame: &Mat, rect: Rect, config: &InventoryConfig) -> opencv::Resu
     let mut stddev = Scalar::default();
     core::mean_std_dev(&gray, &mut mean, &mut stddev, &core::no_array())?;
     Ok((stddev[0] / 64.0).clamp(0.0, 1.0))
+}
+
+fn red_ratio_cell(frame: &Mat, rect: Rect, config: &InventoryConfig) -> opencv::Result<f64> {
+    let crop_rect = inner_cell_rect(rect, config);
+    let crop = Mat::roi(frame, crop_rect)?;
+    let mut hsv = Mat::default();
+    imgproc::cvt_color(
+        &crop,
+        &mut hsv,
+        imgproc::COLOR_BGR2HSV,
+        0,
+        core::AlgorithmHint::ALGO_HINT_DEFAULT,
+    )?;
+
+    // Red wraps around the ends of OpenCV's 0..179 hue range.
+    let hue_range = config.red_hue_range.clamp(1, 30);
+    let saturation = f64::from(config.red_saturation_min);
+    let value = f64::from(config.red_value_min);
+    let mut low_red = Mat::default();
+    let mut high_red = Mat::default();
+    core::in_range(
+        &hsv,
+        &Scalar::new(0.0, saturation, value, 0.0),
+        &Scalar::new(f64::from(hue_range), 255.0, 255.0, 0.0),
+        &mut low_red,
+    )?;
+    core::in_range(
+        &hsv,
+        &Scalar::new(f64::from(180_u8.saturating_sub(hue_range)), saturation, value, 0.0),
+        &Scalar::new(179.0, 255.0, 255.0, 0.0),
+        &mut high_red,
+    )?;
+
+    let mut red_mask = Mat::default();
+    core::bitwise_or(&low_red, &high_red, &mut red_mask, &core::no_array())?;
+    let red_pixels = f64::from(core::count_non_zero(&red_mask)?);
+    let total_pixels = f64::from(crop_rect.width) * f64::from(crop_rect.height);
+    Ok(if total_pixels > 0.0 { red_pixels / total_pixels } else { 0.0 })
 }
 
 pub fn scan_inventory(frame: &Mat, config: &InventoryConfig) -> opencv::Result<InventoryScan> {
@@ -110,12 +163,21 @@ pub fn scan_inventory(frame: &Mat, config: &InventoryConfig) -> opencv::Result<I
         for col in 0..config.columns {
             let rect = cell_rect(config, row, col);
             if !inside_frame(rect, frame) {
-                let cell = CellDebug { row, col, rect, score: 0.0, kind: CellKind::OutOfFrame };
+                let cell = CellDebug {
+                    row,
+                    col,
+                    rect,
+                    score: 0.0,
+                    red_ratio: 0.0,
+                    enchantable: false,
+                    kind: CellKind::OutOfFrame,
+                };
                 cells.push(cell);
                 continue;
             }
 
             let score = score_cell(frame, rect, config)?;
+            let red_ratio = red_ratio_cell(frame, rect, config)?;
             // The amulet is excluded first, even if the start coordinate is earlier.
             let is_amulet = row == config.amulet_row && col == config.amulet_col;
             let before_start = row < config.start_row || (row == config.start_row && col < config.start_col);
@@ -123,8 +185,12 @@ pub fn scan_inventory(frame: &Mat, config: &InventoryConfig) -> opencv::Result<I
                 else if before_start { CellKind::BeforeStart }
                 else if score >= config.threshold { CellKind::Occupied }
                 else { CellKind::Empty };
+            let enchantable = !is_amulet
+                && !before_start
+                && kind == CellKind::Occupied
+                && red_ratio >= config.red_ratio_threshold;
 
-            let cell = CellDebug { row, col, rect, score, kind };
+            let cell = CellDebug { row, col, rect, score, red_ratio, enchantable, kind };
             cells.push(cell);
         }
     }
@@ -276,9 +342,62 @@ mod tests {
         let scan = scan_inventory(&frame, &c).unwrap();
         let amulet = scan.cells.iter().find(|x| x.row == 0 && x.col == 0);
         assert!(amulet.is_some_and(|cell| cell.kind == CellKind::Amulet));
+        assert!(amulet.is_some_and(|cell| !cell.enchantable));
         assert!(!scan.cells.iter().any(|cell| {
             cell.row == 0 && cell.col == 0 && cell.kind == CellKind::Occupied
         }));
+    }
+
+    #[test]
+    fn red_pixels_mark_an_occupied_slot_as_enchantable() {
+        let mut config = InventoryConfig::default();
+        config.columns = 1;
+        config.rows = 1;
+        config.start_row = 0;
+        config.start_col = 0;
+        config.amulet_row = u8::MAX;
+        config.amulet_col = u8::MAX;
+        config.threshold = 0.0;
+        config.red_ratio_threshold = 0.02;
+
+        let mut frame = Mat::new_rows_cols_with_default(
+            64, 64, core::CV_8UC3, Scalar::all(45.0)
+        ).unwrap();
+        imgproc::rectangle(
+            &mut frame,
+            Rect::new(21, 21, 10, 10),
+            Scalar::new(0.0, 0.0, 255.0, 0.0),
+            -1,
+            imgproc::LINE_8,
+            0,
+        ).unwrap();
+
+        let scan = scan_inventory(&frame, &config).unwrap();
+        let cell = &scan.cells[0];
+        assert_eq!(cell.kind, CellKind::Occupied);
+        assert!(cell.red_ratio >= config.red_ratio_threshold);
+        assert!(cell.enchantable);
+    }
+
+    #[test]
+    fn occupied_slot_without_red_pixels_is_not_enchantable() {
+        let mut config = InventoryConfig::default();
+        config.columns = 1;
+        config.rows = 1;
+        config.start_row = 0;
+        config.start_col = 0;
+        config.amulet_row = u8::MAX;
+        config.amulet_col = u8::MAX;
+        config.threshold = 0.0;
+
+        let frame = Mat::new_rows_cols_with_default(
+            64, 64, core::CV_8UC3, Scalar::all(45.0)
+        ).unwrap();
+        let scan = scan_inventory(&frame, &config).unwrap();
+        let cell = &scan.cells[0];
+        assert_eq!(cell.kind, CellKind::Occupied);
+        assert_eq!(cell.red_ratio, 0.0);
+        assert!(!cell.enchantable);
     }
 
     #[test]
