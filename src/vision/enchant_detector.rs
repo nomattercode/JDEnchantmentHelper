@@ -519,6 +519,38 @@ mod tests {
     }
 
     #[test]
+    fn result_popup_ignores_old_search_region_and_scans_full_frame() {
+        let mut frame = Mat::new_rows_cols_with_default(
+            260,
+            420,
+            core::CV_8UC3,
+            Scalar::new(28.0, 35.0, 42.0, 0.0),
+        )
+        .unwrap();
+        let ok = decode_image(OK_BUTTON_TEMPLATE).unwrap();
+        let expected = Rect::new(8, 8, ok.cols(), ok.rows());
+        let mut roi = Mat::roi_mut(&mut frame, expected).unwrap();
+        ok.copy_to(&mut roi).unwrap();
+
+        let cfg = EnchantDetectorConfig {
+            confidence_threshold: 0.95,
+            scale_min: 1.0,
+            scale_max: 1.0,
+            scale_step: 0.05,
+            search_region: Some(Region {
+                x: 300,
+                y: 180,
+                width: 60,
+                height: 40,
+            }),
+            ..Default::default()
+        };
+        let result = analyze_enchant_result(&frame, &cfg).unwrap();
+        assert!(result.ok_button.found, "score={}", result.ok_button.score);
+        assert_eq!(result.ok_button.rect, Some(expected));
+    }
+
+    #[test]
     fn same_ok_button_is_detected_when_enchant_dialog_has_closed() {
         let mut frame = Mat::new_rows_cols_with_default(
             480,

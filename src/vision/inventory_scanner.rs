@@ -247,6 +247,19 @@ mod tests {
     }
 
     #[test]
+    fn inventory_header_detector_rejects_a_blank_frame() {
+        let frame = Mat::new_rows_cols_with_default(
+            478,
+            317,
+            core::CV_8UC3,
+            Scalar::all(28.0),
+        )
+        .unwrap();
+        let found = detect_inventory_grid(&frame, &InventoryConfig::default()).unwrap();
+        assert!(found.is_none());
+    }
+
+    #[test]
     fn default_grid_matches_supplied_inventory_reference() {
         let c = InventoryConfig::default();
         assert_eq!((c.origin_x, c.origin_y), (34, 84));
