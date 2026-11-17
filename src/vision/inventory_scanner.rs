@@ -187,7 +187,6 @@ pub fn scan_inventory(frame: &Mat, config: &InventoryConfig) -> opencv::Result<I
                 else { CellKind::Empty };
             let enchantable = !is_amulet
                 && !before_start
-                && kind == CellKind::Occupied
                 && red_ratio >= config.red_ratio_threshold;
 
             let cell = CellDebug { row, col, rect, score, red_ratio, enchantable, kind };
@@ -349,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn red_pixels_mark_an_occupied_slot_as_enchantable() {
+    fn red_pixels_are_the_authoritative_enchantability_signal() {
         let mut config = InventoryConfig::default();
         config.columns = 1;
         config.rows = 1;
@@ -357,7 +356,7 @@ mod tests {
         config.start_col = 0;
         config.amulet_row = u8::MAX;
         config.amulet_col = u8::MAX;
-        config.threshold = 0.0;
+        config.threshold = 1.0;
         config.red_ratio_threshold = 0.02;
 
         let mut frame = Mat::new_rows_cols_with_default(
@@ -365,7 +364,7 @@ mod tests {
         ).unwrap();
         imgproc::rectangle(
             &mut frame,
-            Rect::new(21, 21, 10, 10),
+            Rect::new(21, 21, 5, 5),
             Scalar::new(0.0, 0.0, 255.0, 0.0),
             -1,
             imgproc::LINE_8,
@@ -374,9 +373,40 @@ mod tests {
 
         let scan = scan_inventory(&frame, &config).unwrap();
         let cell = &scan.cells[0];
-        assert_eq!(cell.kind, CellKind::Occupied);
+        // The small red area deliberately does not pass the old grayscale
+        // occupancy score, proving that the red marker is an independent signal.
+        assert_eq!(cell.kind, CellKind::Empty);
+        assert!(cell.score < config.threshold);
         assert!(cell.red_ratio >= config.red_ratio_threshold);
         assert!(cell.enchantable);
+    }
+
+    #[test]
+    fn high_end_of_hsv_hue_range_is_also_counted_as_red() {
+        let mut config = InventoryConfig::default();
+        config.columns = 1;
+        config.rows = 1;
+        config.start_row = 0;
+        config.start_col = 0;
+        config.amulet_row = u8::MAX;
+        config.amulet_col = u8::MAX;
+        config.threshold = 1.0;
+
+        let mut frame = Mat::new_rows_cols_with_default(
+            64, 64, core::CV_8UC3, Scalar::all(45.0)
+        ).unwrap();
+        // BGR (8, 0, 255) is a red hue close to OpenCV's upper hue boundary.
+        imgproc::rectangle(
+            &mut frame,
+            Rect::new(21, 21, 5, 5),
+            Scalar::new(8.0, 0.0, 255.0, 0.0),
+            -1,
+            imgproc::LINE_8,
+            0,
+        ).unwrap();
+
+        let scan = scan_inventory(&frame, &config).unwrap();
+        assert!(scan.cells[0].enchantable);
     }
 
     #[test]

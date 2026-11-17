@@ -1225,17 +1225,14 @@ impl EnchantmentHelperApp {
                     return;
                 };
 
-                if verified.kind != CellKind::Occupied
-                    || verified.score < self.inventory.threshold
-                    || !verified.enchantable
-                {
+                if !verified.enchantable {
                     self.processed_slots_current_page.insert((item.row, item.col));
                     self.items_processed_in_pass = self.items_processed_in_pass.saturating_add(1);
                     self.current_item = self.next_unprocessed_item();
-                    let reason = if verified.kind == CellKind::Occupied && !verified.enchantable {
+                    let reason = if verified.kind == CellKind::Occupied {
                         "красный маркер не обнаружен или ниже порога фильтра"
                     } else {
-                        "слот пуст"
+                        "красный маркер не обнаружен"
                     };
                     self.log(format!(
                         "Ячейка {}, {} пропущена: {}.",
@@ -1297,7 +1294,7 @@ impl EnchantmentHelperApp {
                         .find(|cell| cell.row == previous.row && cell.col == previous.col)
                         .map(|cell| (cell.kind, cell.enchantable));
                     match updated {
-                        Some((CellKind::Occupied, true)) => {
+                        Some((_, true)) => {
                             self.surviving_items_in_pass = self.surviving_items_in_pass.saturating_add(1);
                             self.log(format!(
                                 "Предмет в ячейке {}, {} уцелел и сохранил красный маркер. Он доступен в следующем проходе.",
@@ -1901,9 +1898,9 @@ impl EnchantmentHelperApp {
         ui.label(egui::RichText::new("Фильтр предметов по красному цвету").strong());
         ui.small("К зачарованию допускаются только занятые ячейки, где доля красных пикселей достигает заданного порога.");
 
-        let mut red_hue = self.inventory.red_hue_range;
-        if ui.add(egui::Slider::new(&mut red_hue, 2..=30).text("Диапазон оттенка красного").suffix("°")).changed() {
-            self.inventory.red_hue_range = red_hue;
+        let mut red_hue_degrees = u16::from(self.inventory.red_hue_range) * 2;
+        if ui.add(egui::Slider::new(&mut red_hue_degrees, 4..=60).text("Диапазон оттенка красного").suffix("°")).changed() {
+            self.inventory.red_hue_range = (red_hue_degrees / 2).clamp(2, 30) as u8;
         }
         let mut red_saturation = self.inventory.red_saturation_min;
         if ui.add(egui::Slider::new(&mut red_saturation, 20..=255).text("Минимальная насыщенность красного")).changed() {
