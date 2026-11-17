@@ -95,7 +95,7 @@ fn valid_region(region: Region) -> bool {
 }
 
 fn valid_region_or_default(region: Region) -> bool {
-    !region.is_configured() || valid_region(region)
+    region == Region::default() || valid_region(region)
 }
 
 fn unit_interval(value: f64, fallback: f64) -> f64 {
