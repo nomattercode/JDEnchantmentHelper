@@ -2464,7 +2464,7 @@ mod tests {
     #[test]
     fn stable_near_threshold_ok_match_gets_three_frame_fallback() {
         // 78% configured sensitivity yields a conservative 60% fallback.
-        assert_eq!(super::ok_button_fallback_threshold(0.78), 0.60);
+        assert!((super::ok_button_fallback_threshold(0.78) - 0.60).abs() < 1e-9);
         assert_eq!(
             super::ok_button_confirmation_requirement(false, 0.67, 0.78, true),
             Some(super::OK_BUTTON_FALLBACK_CONFIRMATIONS),
