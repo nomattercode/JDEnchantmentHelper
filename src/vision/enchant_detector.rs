@@ -157,8 +157,8 @@ fn match_template(
 fn clip_region(region: Region, frame: &Mat) -> Option<Rect> {
     let x1 = region.x.max(0).min(frame.cols());
     let y1 = region.y.max(0).min(frame.rows());
-    let x2 = (region.x + region.width).max(0).min(frame.cols());
-    let y2 = (region.y + region.height).max(0).min(frame.rows());
+    let x2 = region.x.saturating_add(region.width).max(0).min(frame.cols());
+    let y2 = region.y.saturating_add(region.height).max(0).min(frame.rows());
 
     if x2 <= x1 || y2 <= y1 {
         None
@@ -170,8 +170,8 @@ fn clip_region(region: Region, frame: &Mat) -> Option<Rect> {
 fn intersect_rects(left: Rect, right: Rect) -> Option<Rect> {
     let x1 = left.x.max(right.x);
     let y1 = left.y.max(right.y);
-    let x2 = (left.x + left.width).min(right.x + right.width);
-    let y2 = (left.y + left.height).min(right.y + right.height);
+    let x2 = left.x.saturating_add(left.width).min(right.x.saturating_add(right.width));
+    let y2 = left.y.saturating_add(left.height).min(right.y.saturating_add(right.height));
 
     (x2 > x1 && y2 > y1).then(|| Rect::new(x1, y1, x2 - x1, y2 - y1))
 }

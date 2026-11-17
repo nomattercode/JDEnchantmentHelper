@@ -71,15 +71,31 @@ impl UserSettings {
         self.enchant.scale_step = self.enchant.scale_step.clamp(0.02, 0.25);
 
         let region = self.inventory_grid_region;
-        if !region.is_configured()
-            || region.x < 0
-            || region.y < 0
-            || region.width > 32_768
-            || region.height > 32_768
-        {
+        if !valid_region(region) {
             self.inventory_grid_region = Region::default();
         }
+
+        if self.enchant.search_region.is_some_and(|region| !valid_region(region)) {
+            self.enchant.search_region = None;
+        }
+        if !valid_region_or_default(self.enchant.start_button_region) {
+            self.enchant.start_button_region = Region::default();
+        }
     }
+}
+
+fn valid_region(region: Region) -> bool {
+    region.is_configured()
+        && (0..=32_768).contains(&region.x)
+        && (0..=32_768).contains(&region.y)
+        && (1..=32_768).contains(&region.width)
+        && (1..=32_768).contains(&region.height)
+        && region.x.saturating_add(region.width) <= 32_768
+        && region.y.saturating_add(region.height) <= 32_768
+}
+
+fn valid_region_or_default(region: Region) -> bool {
+    !region.is_configured() || valid_region(region)
 }
 
 fn unit_interval(value: f64, fallback: f64) -> f64 {
@@ -166,6 +182,27 @@ mod tests {
         assert_eq!(settings.enchant.confidence_threshold, 1.0);
         assert_eq!(settings.inventory.columns, 1);
         assert_eq!(settings.passes_total, 1);
+    }
+
+    #[test]
+    fn invalid_optional_regions_are_discarded() {
+        let mut settings = UserSettings::default();
+        settings.enchant.search_region = Some(Region {
+            x: i32::MAX,
+            y: 0,
+            width: 50,
+            height: 30,
+        });
+        settings.enchant.start_button_region = Region {
+            x: 0,
+            y: i32::MAX,
+            width: 50,
+            height: 30,
+        };
+        settings.normalize();
+
+        assert_eq!(settings.enchant.search_region, None);
+        assert_eq!(settings.enchant.start_button_region, Region::default());
     }
 
     #[test]
