@@ -4,17 +4,17 @@ use opencv::{
     prelude::*,
 };
 
+use serde::{Deserialize, Serialize};
 use crate::vision::image_io::decode_image;
 
 const OK_BUTTON_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/ok_button.png");
-const OK_BUTTON_THRESHOLD: f64 = 0.86;
 const OK_BUTTON_SCALE_MIN: f64 = 0.65;
 const OK_BUTTON_SCALE_MAX: f64 = 1.45;
 const OK_BUTTON_SCALE_STEP: f64 = 0.05;
 const START_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/start_button_active.png");
 const ENCHANT_HEADER_TEMPLATE: &[u8] = include_bytes!("../../assets/templates/enchant_header.png");
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Region {
     pub x: i32,
     pub y: i32,
@@ -28,9 +28,11 @@ impl Region {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct EnchantDetectorConfig {
     pub confidence_threshold: f64,
+    pub header_threshold: f64,
     pub scale_min: f64,
     pub scale_max: f64,
     pub scale_step: f64,
@@ -45,7 +47,8 @@ pub struct EnchantDetectorConfig {
 impl Default for EnchantDetectorConfig {
     fn default() -> Self {
         Self {
-            confidence_threshold: 0.84,
+            confidence_threshold: 0.78,
+            header_threshold: 0.64,
             scale_min: 0.80,
             scale_max: 1.25,
             scale_step: 0.05,
@@ -113,7 +116,7 @@ fn match_template(
                 Size::new(width, height),
                 0.0,
                 0.0,
-                imgproc::INTER_AREA,
+                if scale > 1.0 { imgproc::INTER_LINEAR } else { imgproc::INTER_AREA },
             )?;
             let mut response = Mat::default();
             imgproc::match_template(
@@ -205,7 +208,7 @@ fn find_ok_button(
         ..cfg.clone()
     };
 
-    let mut matched = match_template(&source, &template, &match_cfg, OK_BUTTON_THRESHOLD)?;
+    let mut matched = match_template(&source, &template, &match_cfg, cfg.confidence_threshold)?;
     if let Some(rect) = &mut matched.rect {
         rect.x += search_rect.x;
         rect.y += search_rect.y;
@@ -240,7 +243,7 @@ fn find_enchant_dialog(
 ) -> opencv::Result<Option<Rect>> {
     let source = grayscale(frame)?;
     let header = grayscale(&decode_image(ENCHANT_HEADER_TEMPLATE)?)?;
-    let matched = match_template(&source, &header, cfg, 0.64)?;
+    let matched = match_template(&source, &header, cfg, cfg.header_threshold.clamp(0.35, 0.99))?;
     if !matched.found {
         return Ok(None);
     }
@@ -383,20 +386,13 @@ fn analyze_enchant_window_inner(
     }
 
     if search_result_center {
-        let center_rect = centered_result_region(frame);
+        // Search every pixel of the game window: result popups may appear away
+        // from the center of the client area on different resolutions.
+        let full_frame = Rect::new(0, 0, frame.cols(), frame.rows());
         let search_rect = if let Some(region) = cfg.search_region {
-            let requested = clip_region(region, frame).ok_or_else(|| {
-                opencv::Error::new(core::StsBadArg, "Область поиска ОК вне кадра")
-            })?;
-            intersect_rects(center_rect, requested).ok_or_else(|| {
-                opencv::Error::new(
-                    core::StsBadArg,
-                    "Заданная область поиска ОК не пересекается с центральной зоной экрана",
-                )
-            })?
-        } else {
-            center_rect
-        };
+            let requested = clip_region(region, frame).ok_or_else(|| opencv::Error::new(core::StsBadArg, "Область поиска ОК вне кадра"))?;
+            intersect_rects(full_frame, requested).ok_or_else(|| opencv::Error::new(core::StsBadArg, "Область поиска ОК вне кадра"))?
+        } else { full_frame };
         ok_button = find_ok_button(frame, search_rect, cfg)?;
     }
 
@@ -467,7 +463,7 @@ mod tests {
         );
         assert_eq!(centered_result_region(&frame), expected_search);
         assert!(result.ok_button.found, "score={}", result.ok_button.score);
-        assert!(result.ok_button.score >= OK_BUTTON_THRESHOLD);
+        assert!(result.ok_button.score >= cfg.confidence_threshold);
         assert_eq!(result.ok_button.rect, Some(expected_rect));
     }
 
@@ -519,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn ok_button_outside_center_half_area_is_ignored() {
+    fn ok_button_at_frame_edge_is_detected() {
         let mut frame = Mat::new_rows_cols_with_default(
             260,
             420,
@@ -539,7 +535,8 @@ mod tests {
             ..Default::default()
         };
         let result = analyze_enchant_result(&frame, &cfg).unwrap();
-        assert!(!result.ok_button.found);
+        assert!(result.ok_button.found, "score={}", result.ok_button.score);
+        assert_eq!(result.ok_button.rect, Some(Rect::new(8, 8, ok.cols(), ok.rows())));
     }
 
     #[test]
@@ -584,7 +581,7 @@ mod tests {
             scale_step: 0.05,
             ..Default::default()
         };
-        let result = match_template(&frame, &frame, &cfg, OK_BUTTON_THRESHOLD).unwrap();
+        let result = match_template(&frame, &frame, &cfg, cfg.confidence_threshold).unwrap();
         assert!(result.found, "score={}", result.score);
         assert!(result.score > 0.99);
     }
@@ -612,7 +609,7 @@ mod tests {
             scale_step: 0.05,
             ..Default::default()
         };
-        let result = match_template(&scaled, &template, &cfg, OK_BUTTON_THRESHOLD).unwrap();
+        let result = match_template(&scaled, &template, &cfg, cfg.confidence_threshold).unwrap();
         assert!(result.found, "scaled button score={}", result.score);
     }
 
