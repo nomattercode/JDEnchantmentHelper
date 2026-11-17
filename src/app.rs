@@ -2168,7 +2168,8 @@ impl eframe::App for EnchantmentHelperApp {
                                 && self.run_state != RunState::Running
                                 && self.run_state != RunState::Paused
                                 && self.selected_window.is_some()
-                                && self.inventory_grid_region.is_configured();
+                                && self.inventory_grid_region.is_configured()
+                                && self.pending_capture_id.is_none();
                             if ui.add_enabled(
                                 can_start,
                                 egui::Button::new(
@@ -2181,10 +2182,14 @@ impl eframe::App for EnchantmentHelperApp {
                                 self.start_automation(ctx);
                             }
                             if !can_start {
-                                let hint = if self.selected_window_data().is_none() {
+                                let hint = if self.pending_capture_id.is_some() {
+                                    "Завершается обработка предыдущего кадра. Повторный запуск пока заблокирован."
+                                } else if self.selected_window_data().is_none() {
                                     "Сначала выберите игровое окно в шаге 1."
-                                } else {
+                                } else if !self.inventory_grid_region.is_configured() {
                                     "Сначала настройте сетку инвентаря в шаге 2."
+                                } else {
+                                    "Дождитесь завершения или остановки текущей серии."
                                 };
                                 ui.small(egui::RichText::new(hint).color(ui.visuals().weak_text_color()));
                             }
@@ -2196,7 +2201,7 @@ impl eframe::App for EnchantmentHelperApp {
                                 ).clicked() {
                                     self.run_state = RunState::Paused;
                                     self.paused_at = Some(Instant::now());
-                                    self.status = "Пауза. F12 продолжает работать.".into();
+                                    self.status = "Пауза. Для продолжения нажмите «Продолжить»; F12 аварийно остановит серию.".into();
                                     self.log("Автоматизация приостановлена.");
                                 }
                                 if ui.add_enabled(
