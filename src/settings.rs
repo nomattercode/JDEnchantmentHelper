@@ -190,6 +190,21 @@ mod tests {
     }
 
     #[test]
+    fn normalize_clamps_red_filter_values() {
+        let mut settings = UserSettings::default();
+        settings.inventory.red_hue_range = 0;
+        settings.inventory.red_saturation_min = 0;
+        settings.inventory.red_value_min = 255;
+        settings.inventory.red_ratio_threshold = f64::NAN;
+        settings.normalize();
+
+        assert_eq!(settings.inventory.red_hue_range, 2);
+        assert_eq!(settings.inventory.red_saturation_min, 20);
+        assert_eq!(settings.inventory.red_value_min, 220);
+        assert_eq!(settings.inventory.red_ratio_threshold, 0.02);
+    }
+
+    #[test]
     fn invalid_optional_regions_are_discarded() {
         let mut settings = UserSettings::default();
         settings.enchant.search_region = Some(Region {
@@ -215,6 +230,10 @@ mod tests {
         let mut expected = UserSettings::default();
         expected.inventory.threshold = 0.23;
         expected.inventory.header_threshold = 0.81;
+        expected.inventory.red_hue_range = 18;
+        expected.inventory.red_saturation_min = 105;
+        expected.inventory.red_value_min = 55;
+        expected.inventory.red_ratio_threshold = 0.07;
         expected.enchant.confidence_threshold = 0.93;
 
         let encoded = serde_json::to_string(&expected).unwrap();
@@ -237,5 +256,9 @@ mod tests {
         assert_eq!(settings.passes_total, 2);
         assert_eq!(settings.inventory.header_threshold, 0.72);
         assert_eq!(settings.enchant.header_threshold, 0.64);
+        assert_eq!(settings.inventory.red_hue_range, 12);
+        assert_eq!(settings.inventory.red_saturation_min, 80);
+        assert_eq!(settings.inventory.red_value_min, 35);
+        assert_eq!(settings.inventory.red_ratio_threshold, 0.02);
     }
 }

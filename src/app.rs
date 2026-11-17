@@ -1895,7 +1895,7 @@ impl EnchantmentHelperApp {
         }
         ui.separator();
         ui.label(egui::RichText::new("Фильтр предметов по красному цвету").strong());
-        ui.small("К зачарованию допускаются только занятые ячейки, где доля красных пикселей достигает заданного порога.");
+        ui.small("Предмет определяется по красным пикселям внутри ячейки. Амулет и ячейки до заданной стартовой позиции исключаются.");
 
         let mut red_hue_degrees = u16::from(self.inventory.red_hue_range) * 2;
         if ui.add(egui::Slider::new(&mut red_hue_degrees, 4..=60).text("Диапазон оттенка красного").suffix("°")).changed() {
