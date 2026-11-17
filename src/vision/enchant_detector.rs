@@ -334,13 +334,13 @@ pub fn analyze_enchant_result(
 fn analyze_enchant_window_inner(
     frame: &Mat,
     cfg: &EnchantDetectorConfig,
-    search_result_center: bool,
+    search_result_popup: bool,
 ) -> opencv::Result<EnchantAnalysis> {
     if frame.empty() {
         return Err(opencv::Error::new(core::StsBadArg, "Входной кадр пуст"));
     }
 
-    let dialog_window = if search_result_center {
+    let dialog_window = if search_result_popup {
         None
     } else {
         find_enchant_dialog(frame, cfg)?
@@ -348,7 +348,7 @@ fn analyze_enchant_window_inner(
     let mut ok_button = empty_match();
     let mut start_button = None;
 
-    if !search_result_center {
+    if !search_result_popup {
         if let Some(dialog) = dialog_window {
             let search_rect = if let Some(region) = cfg.search_region {
                 let requested = clip_region(region, frame).ok_or_else(|| {
@@ -375,15 +375,11 @@ fn analyze_enchant_window_inner(
         }
     }
 
-    if search_result_center {
-        // Search every pixel of the game window: result popups may appear away
-        // from the center of the client area on different resolutions.
+    if search_result_popup {
+        // Result popups may appear anywhere in the captured game window.
+        // Ignore dialog-only ROIs so this path always searches the full frame.
         let full_frame = Rect::new(0, 0, frame.cols(), frame.rows());
-        let search_rect = if let Some(region) = cfg.search_region {
-            let requested = clip_region(region, frame).ok_or_else(|| opencv::Error::new(core::StsBadArg, "Область поиска ОК вне кадра"))?;
-            intersect_rects(full_frame, requested).ok_or_else(|| opencv::Error::new(core::StsBadArg, "Область поиска ОК вне кадра"))?
-        } else { full_frame };
-        ok_button = find_ok_button(frame, search_rect, cfg)?;
+        ok_button = find_ok_button(frame, full_frame, cfg)?;
     }
 
     Ok(EnchantAnalysis {

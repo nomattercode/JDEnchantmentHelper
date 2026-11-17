@@ -203,6 +203,7 @@ pub struct EnchantmentHelperApp {
     last_live_preview_update: Option<Instant>,
     last_saved_settings: Option<String>,
     settings_dirty_since: Option<Instant>,
+    last_settings_save_attempt: Option<Instant>,
     windows: Vec<GameWindow>,
     selected_window: Option<isize>,
     window_previews: HashMap<isize, WindowPreview>,
@@ -273,6 +274,7 @@ impl Default for EnchantmentHelperApp {
             last_live_preview_update: None,
             last_saved_settings,
             settings_dirty_since: None,
+            last_settings_save_attempt: None,
             windows: list_visible_windows(),
             selected_window: None,
             window_previews: HashMap::new(),
@@ -341,23 +343,40 @@ impl EnchantmentHelperApp {
     }
 
     fn persist_settings_if_needed(&mut self) {
+        const SAVE_DEBOUNCE: Duration = Duration::from_millis(600);
+        const SAVE_RETRY_DELAY: Duration = Duration::from_secs(5);
+
         let settings = self.current_user_settings();
-        let Ok(snapshot) = serde_json::to_string(&settings) else { return; };
-        if self.last_saved_settings.as_deref() != Some(snapshot.as_str()) && self.settings_dirty_since.is_none() {
+        let Ok(snapshot) = serde_json::to_string(&settings) else {
+            return;
+        };
+        if self.last_saved_settings.as_deref() != Some(snapshot.as_str())
+            && self.settings_dirty_since.is_none()
+        {
             self.settings_dirty_since = Some(Instant::now());
         }
-        if self.settings_dirty_since.is_some_and(|since| since.elapsed() >= Duration::from_millis(600)) {
-            match crate::settings::save(&settings) {
-                Ok(()) => {
-                    self.last_saved_settings = Some(snapshot);
-                    self.settings_dirty_since = None;
-                    self.log("Настройки сохранены в %APPDATA%\\JDEnchantmentHelper\\settings.json.");
-                }
-                Err(error) => {
-                    self.last_saved_settings = Some(snapshot);
-                    self.settings_dirty_since = None;
-                    self.log(format!("Не удалось сохранить настройки: {error}"));
-                }
+
+        let debounce_elapsed = self
+            .settings_dirty_since
+            .is_some_and(|since| since.elapsed() >= SAVE_DEBOUNCE);
+        let retry_elapsed = self
+            .last_settings_save_attempt
+            .map_or(true, |last| last.elapsed() >= SAVE_RETRY_DELAY);
+        if !debounce_elapsed || !retry_elapsed {
+            return;
+        }
+
+        self.last_settings_save_attempt = Some(Instant::now());
+        match crate::settings::save(&settings) {
+            Ok(()) => {
+                self.last_saved_settings = Some(snapshot);
+                self.settings_dirty_since = None;
+                self.last_settings_save_attempt = None;
+                self.log("Настройки сохранены в %APPDATA%\\JDEnchantmentHelper\\settings.json.");
+            }
+            Err(error) => {
+                // Keep the dirty marker so the save is retried after a delay.
+                self.log(format!("Не удалось сохранить настройки; повтор через 5 секунд: {error}"));
             }
         }
     }
@@ -2290,9 +2309,18 @@ impl eframe::App for EnchantmentHelperApp {
         });
 
         self.persist_settings_if_needed();
-        if self.automation_phase.is_some() || self.pending_capture_id.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(25));
-        } else if !self.window_preview_queue.is_empty() {
+        if self.settings_dirty_since.is_some() {
+            let delay = self
+                .last_settings_save_attempt
+                .map(|last| Duration::from_secs(5).saturating_sub(last.elapsed()))
+                .unwrap_or(Duration::from_millis(650))
+                .max(Duration::from_millis(50));
+            ctx.request_repaint_after(delay);
+        }
+        if self.automation_phase.is_some()
+            || self.pending_capture_id.is_some()
+            || !self.window_preview_queue.is_empty()
+        {
             ctx.request_repaint_after(Duration::from_millis(25));
         }
     }
