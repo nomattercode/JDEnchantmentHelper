@@ -154,7 +154,7 @@ pub fn detect_inventory_grid(frame: &Mat, base: &InventoryConfig) -> opencv::Res
     imgproc::cvt_color(&header, &mut template, imgproc::COLOR_BGR2GRAY, 0, core::AlgorithmHint::ALGO_HINT_DEFAULT)?;
     let (mut best_score, mut best_rect, mut best_scale) = (-1.0_f64, None, 1.0_f64);
     let mut scale = 0.70_f64;
-    while scale <= 2.50 + 0.0001 {
+    while scale <= 3.00 + 0.0001 {
         let width = (f64::from(template.cols()) * scale).round() as i32;
         let height = (f64::from(template.rows()) * scale).round() as i32;
         if width >= 30 && height >= 12 && width <= source.cols() && height <= source.rows() {
@@ -219,6 +219,27 @@ mod tests {
         assert_eq!((found.grid_region.x, found.grid_region.y), (34, 84));
         assert_eq!((found.grid_region.width, found.grid_region.height), (236, 316));
         assert_eq!((found.config.columns, found.config.rows), (6, 8));
+    }
+
+    #[test]
+    fn inventory_header_detection_supports_three_x_ui_scale() {
+        let mut frame = Mat::new_rows_cols_with_default(
+            620, 650, core::CV_8UC3, Scalar::all(28.0)
+        ).unwrap();
+        let header = crate::vision::image_io::decode_image(INVENTORY_HEADER_TEMPLATE).unwrap();
+        let mut scaled = Mat::default();
+        imgproc::resize(
+            &header, &mut scaled, Size::new(261, 90), 0.0, 0.0, imgproc::INTER_LINEAR
+        ).unwrap();
+        let mut roi = Mat::roi_mut(&mut frame, Rect::new(30, 20, 261, 90)).unwrap();
+        scaled.copy_to(&mut roi).unwrap();
+
+        let found = detect_inventory_grid(&frame, &InventoryConfig::default()).unwrap().unwrap();
+        assert!(found.score >= 0.72);
+        assert!((found.grid_region.x - 57).abs() <= 2);
+        assert!((found.grid_region.y - 113).abs() <= 2);
+        assert!((found.grid_region.width - 354).abs() <= 2);
+        assert!((found.grid_region.height - 474).abs() <= 2);
     }
 
     #[test]
