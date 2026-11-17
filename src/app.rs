@@ -1820,7 +1820,7 @@ impl EnchantmentHelperApp {
         } else {
             ui.colored_label(
                 egui::Color32::YELLOW,
-                "Сетка не настроена. Нажмите «Снять кадр и настроить сетку».",
+                "Сетка не настроена. Нажмите «Найти инвентарь автоматически» или «Снять кадр и выделить сетку».",
             );
         }
     }
@@ -2089,7 +2089,7 @@ impl eframe::App for EnchantmentHelperApp {
                             if !selected {
                                 ui.label("Сначала выберите окно Jade Dynasty выше.");
                             } else if !grid_ready {
-                                ui.label("Снимите кадр игры и выделите всю сетку инвентаря.");
+                                ui.label("Найдите инвентарь автоматически по верхнему заголовку или настройте сетку вручную.");
                             } else {
                                 ui.horizontal(|ui| {
                                     ui.label(
