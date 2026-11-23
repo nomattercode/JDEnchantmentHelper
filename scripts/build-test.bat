@@ -97,7 +97,7 @@ echo [INFO] Static OpenCV libraries: "%VCPKG_INSTALLED%\lib"
 
 echo.
 echo [1/5] Checking Rust formatting...
-cargo fmt --all
+cargo fmt --all -- --check
 if errorlevel 1 exit /b 1
 
 echo.
@@ -152,8 +152,6 @@ mkdir "dist\JD-Enchantment-Helper-Portable"
 if errorlevel 1 exit /b 1
 
 copy /y "target\release\jd-enchantment-helper.exe" "dist\JD-Enchantment-Helper-Portable\jd-enchantment-helper.exe" >nul
-if errorlevel 1 exit /b 1
-copy /y "run.bat" "dist\JD-Enchantment-Helper-Portable\run.bat" >nul
 if errorlevel 1 exit /b 1
 copy /y "PORTABLE_README.txt" "dist\JD-Enchantment-Helper-Portable\README.txt" >nul
 if errorlevel 1 exit /b 1

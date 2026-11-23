@@ -1,11 +1,26 @@
-name: Rust CI
+name: Windows build
 
 on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  windows:
-    name: Check, test and build on Windows
+  build:
+    name: Format, test and package (Windows x64)
     runs-on: windows-latest
     steps:
       - name: Check out repository
@@ -14,22 +29,28 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install LLVM and OpenCV
+      - name: Install LLVM and static OpenCV
         shell: pwsh
         run: |
           choco install llvm --no-progress -y
           $vcpkg = $env:VCPKG_INSTALLATION_ROOT
           if (-not $vcpkg) { $vcpkg = 'C:\vcpkg' }
-          & "$vcpkg\vcpkg.exe" install opencv4:x64-windows-static
+          & "$vcpkg\vcpkg.exe" install opencv4:x64-windows-static --disable-metrics
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "VCPKG_ROOT=$vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "VCPKGRS_TRIPLET=x64-windows-static" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Remove-Item Env:VCPKGRS_DYNAMIC -ErrorAction SilentlyContinue
           "$env:ProgramFiles\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: Show toolchain versions
         shell: pwsh
@@ -39,15 +60,61 @@ jobs:
           clang --version
 
       - name: Check formatting
-        run: cargo fmt --all
+        run: cargo fmt --all -- --check
 
-      - name: Check compilation
+      - name: Check all targets
         run: cargo check --all-targets
 
       - name: Run tests
-        # OpenCV's vcpkg Debug libraries fail to link with the generated Rust bindings.
-        # Test in Release, matching the profile used for the distributed executable.
+        # OpenCV's Debug libraries are not compatible with the generated Rust bindings.
+        # Release tests match the configuration used for the distributed executable.
         run: cargo test --release --all-targets
 
-      - name: Build release
-        run: cargo build --release
+      - name: Build GUI executable with UAC manifest
+        run: cargo build --release --features require-admin
+
+      - name: Verify executable
+        shell: pwsh
+        run: |
+          $exe = "target\release\jd-enchantment-helper.exe"
+          if (-not (Test-Path $exe)) { throw "Release executable was not created." }
+          dumpbin /DEPENDENTS $exe | Tee-Object -FilePath "$env:TEMP\jd-helper-deps.txt"
+          if (Select-String -Path "$env:TEMP\jd-helper-deps.txt" -Pattern "opencv_|VCRUNTIME|MSVCP140") {
+            throw "The executable imports OpenCV or the dynamic MSVC runtime."
+          }
+
+      - name: Prepare portable ZIP
+        shell: pwsh
+        run: |
+          $dist = "dist\JD-Enchantment-Helper-Portable"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item "target\release\jd-enchantment-helper.exe" "$dist\jd-enchantment-helper.exe"
+          Copy-Item "PORTABLE_README.txt" "$dist\README.txt"
+          Compress-Archive -Path "$dist\*" -DestinationPath "dist\JD-Enchantment-Helper-Portable.zip" -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JD-Enchantment-Helper-Windows-x64
+          path: dist/JD-Enchantment-Helper-Portable.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download portable package
+        uses: actions/download-artifact@v4
+        with:
+          name: JD-Enchantment-Helper-Windows-x64
+          path: dist
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" "dist/JD-Enchantment-Helper-Portable.zip" --title "${GITHUB_REF_NAME}" --generate-notes

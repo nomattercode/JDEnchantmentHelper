@@ -2166,107 +2166,10 @@ impl EnchantmentHelperApp {
     }
 }
 
-impl eframe::App for EnchantmentHelperApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.update_automation(ctx);
-        self.capture_next_window_preview(ctx);
+    fn left_panel_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    }
 
-        egui::TopBottomPanel::top("header").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("Jade Dynasty · Зачарование");
-                ui.separator();
-                let (state, color) = match self.run_state {
-                    RunState::Running => ("В РАБОТЕ", egui::Color32::from_rgb(70, 190, 125)),
-                    RunState::Paused => ("ПАУЗА", egui::Color32::from_rgb(225, 175, 65)),
-                    RunState::Stopped => ("ОСТАНОВЛЕНО", egui::Color32::from_rgb(180, 115, 115)),
-                    RunState::Idle if self.selected_window_data().is_none() => {
-                        ("ВЫБЕРИТЕ ИГРОВОЕ ОКНО", ui.visuals().weak_text_color())
-                    }
-                    RunState::Idle if !self.inventory_grid_region.is_configured() => {
-                        ("НАСТРОЙТЕ ИНВЕНТАРЬ", ui.visuals().weak_text_color())
-                    }
-                    RunState::Idle => ("ГОТОВО К ЗАПУСКУ", egui::Color32::from_rgb(70, 190, 125)),
-                };
-                ui.label(
-                    egui::RichText::new(state)
-                        .strong()
-                        .color(color),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.colored_label(
-                        egui::Color32::LIGHT_RED,
-                        egui::RichText::new("F12 · АВАРИЙНЫЙ СТОП").strong(),
-                    );
-                });
-            });
-        });
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.columns(2, |columns| {
-                    columns[0].vertical(|ui| {
-                        ui.group(|ui| {
-                            ui.label(egui::RichText::new("1. ИГРОВОЕ ОКНО").strong());
-                            ui.add_space(4.0);
-                            self.game_window_ui(ui);
-                        });
-
-                        ui.add_space(8.0);
-                        ui.group(|ui| {
-                            ui.label(egui::RichText::new("2. ИНВЕНТАРЬ").strong());
-                            ui.add_space(4.0);
-                            self.inventory_calibration_ui(ui, ctx);
-                            ui.separator();
-
-                            let grid_ready = self.inventory_grid_region.is_configured();
-                            let selected = self.selected_window_data().is_some();
-
-                            if !selected {
-                                ui.label("Сначала выберите окно Jade Dynasty выше.");
-                            } else if !grid_ready {
-                                ui.label("Найдите инвентарь автоматически по верхнему заголовку или настройте сетку вручную.");
-                            } else {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("Сетка настроена")
-                                            .strong()
-                                            .color(egui::Color32::from_rgb(70, 190, 125)),
-                                    );
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            ui.small(format!(
-                                                "{} × {} · {} ячеек",
-                                                self.inventory.columns,
-                                                self.inventory.rows,
-                                                u16::from(self.inventory.columns)
-                                                    * u16::from(self.inventory.rows)
-                                            ));
-                                        },
-                                    );
-                                });
-                            }
-
-                            egui::CollapsingHeader::new("Параметры сетки и распознавания")
-                                .default_open(true)
-                                .show(ui, |ui| {
-                                    ui.add_enabled_ui(self.automation_phase.is_none(), |ui| {
-                                        self.inventory_settings_ui(ui);
-                                    });
-                                    if self.automation_phase.is_some() {
-                                        ui.small("Параметры заблокированы на время серии.");
-                                    }
-                                });
-                        });
-
-                        ui.add_space(8.0);
-                        ui.group(|ui| {
-                            ui.label(egui::RichText::new("ПЕРЕД ЗАПУСКОМ").strong());
-                            ui.small("Откройте первую страницу инвентаря, убедитесь, что амулет на своём месте, и не перемещайте предметы вручную во время серии.");
-                        });
-                    });
-
-                    columns[1].vertical(|ui| {
+    fn right_panel_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
                         ui.group(|ui| {
                             ui.label(egui::RichText::new("3. ЗАПУСК И УПРАВЛЕНИЕ").strong());
                             ui.add_space(4.0);
@@ -2434,22 +2337,82 @@ impl eframe::App for EnchantmentHelperApp {
                             }
                         });
 
-                        ui.add_space(8.0);
-                        ui.group(|ui| {
-                            ui.label(egui::RichText::new(format!("ЖУРНАЛ СОБЫТИЙ · {}", self.logs.len())).strong());
-                            egui::ScrollArea::vertical()
-                                .max_height(180.0)
-                                .stick_to_bottom(true)
-                                .show(ui, |ui| {
-                                    for line in self.logs.iter().rev().take(120).rev() {
-                                        ui.monospace(line);
-                                    }
-                                });
-                        });
-                    });
+    }
+
+impl eframe::App for EnchantmentHelperApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.update_automation(ctx);
+        self.capture_next_window_preview(ctx);
+
+        egui::TopBottomPanel::top("header").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading("Jade Dynasty · Зачарование");
+                ui.separator();
+                let (state, color) = match self.run_state {
+                    RunState::Running => ("В РАБОТЕ", egui::Color32::from_rgb(70, 190, 125)),
+                    RunState::Paused => ("ПАУЗА", egui::Color32::from_rgb(225, 175, 65)),
+                    RunState::Stopped => ("ОСТАНОВЛЕНО", egui::Color32::from_rgb(180, 115, 115)),
+                    RunState::Idle if self.selected_window_data().is_none() => {
+                        ("ВЫБЕРИТЕ ИГРОВОЕ ОКНО", ui.visuals().weak_text_color())
+                    }
+                    RunState::Idle if !self.inventory_grid_region.is_configured() => {
+                        ("НАСТРОЙТЕ ИНВЕНТАРЬ", ui.visuals().weak_text_color())
+                    }
+                    RunState::Idle => ("ГОТОВО К ЗАПУСКУ", egui::Color32::from_rgb(70, 190, 125)),
+                };
+                ui.label(
+                    egui::RichText::new(state)
+                        .strong()
+                        .color(color),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_RED,
+                        egui::RichText::new("F12 · АВАРИЙНЫЙ СТОП").strong(),
+                    );
                 });
             });
         });
+
+        egui::TopBottomPanel::bottom("event_log")
+            .resizable(true)
+            .default_height(176.0)
+            .min_height(104.0)
+            .max_height(320.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("ЖУРНАЛ СОБЫТИЙ").strong());
+                    ui.label(egui::RichText::new(format!("· {}", self.logs.len())).weak());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.small("Последние события · новые записи внизу");
+                    });
+                });
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(true)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for line in self.logs.iter().rev().take(160).rev() {
+                            ui.monospace(line);
+                        }
+                    });
+            });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                if ui.available_width() >= 1160.0 {
+                    ui.columns(2, |columns| {
+                        columns[0].vertical(|ui| self.left_panel_ui(ui, ctx));
+                        columns[1].vertical(|ui| self.right_panel_ui(ui, ctx));
+                    });
+                } else {
+                    // Reflow to one column instead of squeezing two panes until they overlap.
+                    self.left_panel_ui(ui, ctx);
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    self.right_panel_ui(ui, ctx);
+                }
 
         self.persist_settings_if_needed();
         if self.settings_dirty_since.is_some() {
