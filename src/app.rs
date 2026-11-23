@@ -2167,6 +2167,65 @@ impl EnchantmentHelperApp {
 }
 
     fn left_panel_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+                        ui.group(|ui| {
+                            ui.label(egui::RichText::new("1. ИГРОВОЕ ОКНО").strong());
+                            ui.add_space(4.0);
+                            self.game_window_ui(ui);
+                        });
+
+                        ui.add_space(8.0);
+                        ui.group(|ui| {
+                            ui.label(egui::RichText::new("2. ИНВЕНТАРЬ").strong());
+                            ui.add_space(4.0);
+                            self.inventory_calibration_ui(ui, ctx);
+                            ui.separator();
+
+                            let grid_ready = self.inventory_grid_region.is_configured();
+                            let selected = self.selected_window_data().is_some();
+
+                            if !selected {
+                                ui.label("Сначала выберите окно Jade Dynasty выше.");
+                            } else if !grid_ready {
+                                ui.label("Найдите инвентарь автоматически по верхнему заголовку или настройте сетку вручную.");
+                            } else {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("Сетка настроена")
+                                            .strong()
+                                            .color(egui::Color32::from_rgb(70, 190, 125)),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.small(format!(
+                                                "{} × {} · {} ячеек",
+                                                self.inventory.columns,
+                                                self.inventory.rows,
+                                                u16::from(self.inventory.columns)
+                                                    * u16::from(self.inventory.rows)
+                                            ));
+                                        },
+                                    );
+                                });
+                            }
+
+                            egui::CollapsingHeader::new("Параметры сетки и распознавания")
+                                .default_open(true)
+                                .show(ui, |ui| {
+                                    ui.add_enabled_ui(self.automation_phase.is_none(), |ui| {
+                                        self.inventory_settings_ui(ui);
+                                    });
+                                    if self.automation_phase.is_some() {
+                                        ui.small("Параметры заблокированы на время серии.");
+                                    }
+                                });
+                        });
+
+                        ui.add_space(8.0);
+                        ui.group(|ui| {
+                            ui.label(egui::RichText::new("ПЕРЕД ЗАПУСКОМ").strong());
+                            ui.small("Откройте первую страницу инвентаря, убедитесь, что амулет на своём месте, и не перемещайте предметы вручную во время серии.");
+                        });
     }
 
     fn right_panel_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -2413,6 +2472,8 @@ impl eframe::App for EnchantmentHelperApp {
                     ui.add_space(8.0);
                     self.right_panel_ui(ui, ctx);
                 }
+            });
+        });
 
         self.persist_settings_if_needed();
         if self.settings_dirty_since.is_some() {
