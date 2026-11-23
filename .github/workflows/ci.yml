@@ -32,7 +32,6 @@ jobs:
       - name: Install LLVM and static OpenCV
         shell: pwsh
         run: |
-          choco install llvm --no-progress -y
           $vcpkg = $env:VCPKG_INSTALLATION_ROOT
           if (-not $vcpkg) { $vcpkg = 'C:\vcpkg' }
           & "$vcpkg\vcpkg.exe" --disable-metrics install opencv4:x64-windows-static
@@ -40,7 +39,8 @@ jobs:
           "VCPKG_ROOT=$vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "VCPKGRS_TRIPLET=x64-windows-static" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Remove-Item Env:VCPKGRS_DYNAMIC -ErrorAction SilentlyContinue
-          "$env:ProgramFiles\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          if (-not $env:llvmX64) { throw "Visual Studio LLVM path (llvmX64) was not set." }
+          $env:llvmX64 | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
