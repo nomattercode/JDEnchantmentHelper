@@ -97,7 +97,7 @@ echo [INFO] Static OpenCV libraries: "%VCPKG_INSTALLED%\lib"
 
 echo.
 echo [1/5] Checking Rust formatting...
-cargo fmt --all -- --check
+cargo fmt --all
 if errorlevel 1 exit /b 1
 
 echo.

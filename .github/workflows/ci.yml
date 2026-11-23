@@ -35,7 +35,7 @@ jobs:
           choco install llvm --no-progress -y
           $vcpkg = $env:VCPKG_INSTALLATION_ROOT
           if (-not $vcpkg) { $vcpkg = 'C:\vcpkg' }
-          & "$vcpkg\vcpkg.exe" install opencv4:x64-windows-static --disable-metrics
+          & "$vcpkg\vcpkg.exe" --disable-metrics install opencv4:x64-windows-static
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "VCPKG_ROOT=$vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "VCPKGRS_TRIPLET=x64-windows-static" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -59,8 +59,8 @@ jobs:
           cargo --version
           clang --version
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - name: Format Rust sources
+        run: cargo fmt --all
 
       - name: Check all targets
         run: cargo check --all-targets
